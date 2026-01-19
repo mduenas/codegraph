@@ -5,6 +5,7 @@
  * with Claude Code.
  */
 
+import { execSync } from 'child_process';
 import { showBanner, showNextSteps, success, error, info, chalk } from './banner';
 import { promptInstallLocation, promptAutoAllow, InstallLocation } from './prompts';
 import { writeMcpConfig, writePermissions, hasMcpConfig, hasPermissions } from './config-writer';
@@ -25,11 +26,22 @@ export async function runInstaller(): Promise<void> {
   showBanner();
 
   try {
-    // Step 1: Ask for installation location
+    // Step 1: Install codegraph globally
+    console.log(chalk.dim('  Installing codegraph globally...'));
+    try {
+      execSync('npm install -g @colbymchenry/codegraph', { stdio: 'pipe' });
+      success('Installed codegraph command globally');
+    } catch {
+      // May fail if no permissions, but that's ok - npx still works
+      info('Could not install globally (try with sudo if needed)');
+    }
+    console.log();
+
+    // Step 2: Ask for installation location
     const location = await promptInstallLocation();
     console.log();
 
-    // Step 2: Write MCP configuration
+    // Step 3: Write MCP configuration
     const alreadyHasMcp = hasMcpConfig(location);
     writeMcpConfig(location);
 
@@ -39,7 +51,7 @@ export async function runInstaller(): Promise<void> {
       success(`Added MCP server to ${location === 'global' ? '~/.claude.json' : './.claude.json'}`);
     }
 
-    // Step 3: Ask about auto-allow permissions
+    // Step 4: Ask about auto-allow permissions
     const autoAllow = await promptAutoAllow();
     console.log();
 
@@ -54,7 +66,7 @@ export async function runInstaller(): Promise<void> {
       }
     }
 
-    // Step 4: For local install, initialize the project
+    // Step 5: For local install, initialize the project
     if (location === 'local') {
       await initializeLocalProject();
     }

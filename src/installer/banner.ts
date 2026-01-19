@@ -121,7 +121,7 @@ export function showNextSteps(location: 'global' | 'local'): void {
   if (location === 'global') {
     console.log(chalk.dim('  Quick start:'));
     console.log(chalk.dim('    cd your-project'));
-    console.log(chalk.cyan('    npx @colbymchenry/codegraph init -i'));
+    console.log(chalk.cyan('    codegraph init -i'));
   } else {
     console.log(chalk.dim('  CodeGraph is ready to use in this project!'));
   }
