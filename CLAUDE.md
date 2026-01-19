@@ -120,6 +120,35 @@ codegraph hooks install     # Install git auto-sync
 codegraph serve --mcp       # Start MCP server
 ```
 
+## MCP Tools Best Practices
+
+When using CodeGraph MCP tools, follow these guidelines to minimize context usage:
+
+### For Complex Tasks (features, refactoring, architecture)
+Use `codegraph_explore` - it does intensive exploration internally and returns a condensed brief:
+```
+codegraph_explore(task: "implement user authentication with OAuth")
+```
+This replaces multiple tool calls and keeps your main context clean.
+
+### For Simple Lookups
+Use targeted tools directly:
+- `codegraph_search` - Find symbols by name
+- `codegraph_node` - Get details about one symbol
+- `codegraph_callers/callees` - Understand usage patterns
+
+### Context Usage Comparison
+| Approach | Context Impact |
+|----------|---------------|
+| Multiple `codegraph_*` calls | High - each result stays in context |
+| Single `codegraph_explore` | Low - returns condensed summary |
+
+### Important
+CodeGraph provides **code context**, not product requirements. For new features, still ask the user about:
+- UX preferences and behavior
+- Edge cases and error handling
+- Acceptance criteria
+
 ## Test Structure
 
 Tests are in `__tests__/` directory with files mirroring the module structure:

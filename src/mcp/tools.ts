@@ -71,7 +71,7 @@ export const tools: ToolDefinition[] = [
   },
   {
     name: 'codegraph_context',
-    description: 'PRIMARY TOOL: Build comprehensive context for a task. Returns entry points, related symbols, and key code - often enough to understand the codebase without additional tool calls.',
+    description: 'PRIMARY TOOL: Build comprehensive context for a task. Returns entry points, related symbols, and key code - often enough to understand the codebase without additional tool calls. NOTE: This provides CODE context, not product requirements. For new features, still clarify UX/behavior questions with the user before implementing.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -177,6 +177,29 @@ export const tools: ToolDefinition[] = [
       properties: {},
     },
   },
+  {
+    name: 'codegraph_explore',
+    description: 'RECOMMENDED FOR COMPLEX TASKS: Deep exploration that returns a condensed brief. Internally performs multiple searches, call graph analysis, and impact assessment - then synthesizes results into a compact summary. Use this instead of multiple codegraph_* calls to keep your context clean. Returns: key files, critical functions, data flow summary, and suggested approach.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task: {
+          type: 'string',
+          description: 'Detailed description of the feature, bug, or task to explore',
+        },
+        focus: {
+          type: 'string',
+          description: 'Optional focus area: "architecture" (structure & patterns), "implementation" (specific code), or "impact" (what would change). Default: auto-detect.',
+          enum: ['architecture', 'implementation', 'impact'],
+        },
+        keywords: {
+          type: 'string',
+          description: 'Optional comma-separated keywords to search for (e.g., "bundle,swap,subscription")',
+        },
+      },
+      required: ['task'],
+    },
+  },
 ];
 
 /**
@@ -205,6 +228,8 @@ export class ToolHandler {
           return await this.handleNode(args);
         case 'codegraph_status':
           return await this.handleStatus();
+        case 'codegraph_explore':
+          return await this.handleExplore(args);
         default:
           return this.errorResult(`Unknown tool: ${toolName}`);
       }
@@ -248,13 +273,47 @@ export class ToolHandler {
       format: 'markdown',
     });
 
+    // Detect if this looks like a feature request (vs bug fix or exploration)
+    const isFeatureQuery = this.looksLikeFeatureRequest(task);
+    const reminder = isFeatureQuery
+      ? '\n\n---\n**Note:** This is code context only. For new features, consider asking the user about UX preferences, edge cases, and acceptance criteria before implementing.'
+      : '';
+
     // buildContext returns string when format is 'markdown'
     if (typeof context === 'string') {
-      return this.textResult(context);
+      return this.textResult(context + reminder);
     }
 
     // If it returns TaskContext, format it
-    return this.textResult(this.formatTaskContext(context));
+    return this.textResult(this.formatTaskContext(context) + reminder);
+  }
+
+  /**
+   * Heuristic to detect if a query looks like a feature request
+   */
+  private looksLikeFeatureRequest(task: string): boolean {
+    const featureKeywords = [
+      'add', 'create', 'implement', 'build', 'enable', 'allow',
+      'new feature', 'support for', 'ability to', 'want to',
+      'should be able', 'need to add', 'swap', 'edit', 'modify'
+    ];
+    const bugKeywords = [
+      'fix', 'bug', 'error', 'broken', 'crash', 'issue', 'problem',
+      'not working', 'fails', 'undefined', 'null'
+    ];
+    const explorationKeywords = [
+      'how does', 'where is', 'what is', 'find', 'show me',
+      'explain', 'understand', 'explore'
+    ];
+
+    const lowerTask = task.toLowerCase();
+
+    // If it's clearly a bug or exploration, not a feature
+    if (bugKeywords.some(k => lowerTask.includes(k))) return false;
+    if (explorationKeywords.some(k => lowerTask.includes(k))) return false;
+
+    // If it matches feature keywords, it's likely a feature request
+    return featureKeywords.some(k => lowerTask.includes(k));
   }
 
   /**
@@ -385,6 +444,208 @@ export class ToolHandler {
     }
 
     return this.textResult(lines.join('\n'));
+  }
+
+  /**
+   * Handle codegraph_explore - the "sub-agent" that does intensive exploration
+   * and returns a condensed brief
+   */
+  private async handleExplore(args: Record<string, unknown>): Promise<ToolResult> {
+    const task = args.task as string;
+    const focus = args.focus as string | undefined;
+    const keywordsArg = args.keywords as string | undefined;
+
+    // Phase 1: Extract search terms
+    const keywords = this.extractKeywords(task, keywordsArg);
+
+    // Phase 2: Find relevant symbols (internal, not returned directly)
+    const symbolMap = new Map<string, Node>();
+    const fileSet = new Set<string>();
+
+    for (const keyword of keywords.slice(0, 5)) { // Limit to 5 keywords
+      const results = this.cg.searchNodes(keyword, { limit: 10 });
+      for (const r of results) {
+        if (!symbolMap.has(r.node.id)) {
+          symbolMap.set(r.node.id, r.node);
+          fileSet.add(r.node.filePath);
+        }
+      }
+    }
+
+    // Phase 3: Analyze call relationships for top symbols
+    const callGraphInsights: string[] = [];
+    const topSymbols = Array.from(symbolMap.values())
+      .filter(n => n.kind === 'function' || n.kind === 'method' || n.kind === 'component')
+      .slice(0, 5);
+
+    for (const symbol of topSymbols) {
+      const callers = this.cg.getCallers(symbol.id);
+      const callees = this.cg.getCallees(symbol.id);
+
+      if (callers.length > 0 || callees.length > 0) {
+        const callerNames = callers.slice(0, 3).map(c => c.node.name).join(', ');
+        const calleeNames = callees.slice(0, 3).map(c => c.node.name).join(', ');
+
+        let insight = `**${symbol.name}**`;
+        if (callers.length > 0) insight += ` ← called by: ${callerNames}${callers.length > 3 ? '...' : ''}`;
+        if (callees.length > 0) insight += ` → calls: ${calleeNames}${callees.length > 3 ? '...' : ''}`;
+        callGraphInsights.push(insight);
+      }
+    }
+
+    // Phase 4: Identify key entry points and patterns
+    const components = Array.from(symbolMap.values()).filter(n => n.kind === 'component');
+    const routes = Array.from(symbolMap.values()).filter(n => n.kind === 'route');
+    const interfaces = Array.from(symbolMap.values()).filter(n => n.kind === 'interface' || n.kind === 'type_alias');
+    const functions = Array.from(symbolMap.values()).filter(n => n.kind === 'function' || n.kind === 'method');
+
+    // Phase 5: Build condensed brief
+    const brief = this.buildExploreBrief({
+      task,
+      focus,
+      keywords,
+      files: Array.from(fileSet),
+      components,
+      routes,
+      interfaces,
+      functions,
+      callGraphInsights,
+      totalSymbols: symbolMap.size,
+    });
+
+    // Add feature request reminder if applicable
+    const isFeatureQuery = this.looksLikeFeatureRequest(task);
+    const reminder = isFeatureQuery
+      ? '\n\n---\n**Before implementing:** Clarify with the user: UX preferences, edge cases, error handling, and acceptance criteria.'
+      : '';
+
+    return this.textResult(brief + reminder);
+  }
+
+  /**
+   * Extract keywords from task description
+   */
+  private extractKeywords(task: string, explicitKeywords?: string): string[] {
+    const keywords: string[] = [];
+
+    // Add explicit keywords first
+    if (explicitKeywords) {
+      keywords.push(...explicitKeywords.split(',').map(k => k.trim()).filter(Boolean));
+    }
+
+    // Extract likely code identifiers from task (camelCase, PascalCase, snake_case)
+    const identifierPattern = /\b([A-Z][a-zA-Z0-9]*|[a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]*|[a-z]+_[a-z_]+)\b/g;
+    const matches = task.match(identifierPattern) || [];
+    keywords.push(...matches);
+
+    // Extract quoted terms
+    const quotedPattern = /"([^"]+)"|'([^']+)'/g;
+    let match;
+    while ((match = quotedPattern.exec(task)) !== null) {
+      const quoted = match[1] || match[2];
+      if (quoted) keywords.push(quoted);
+    }
+
+    // Extract domain-specific terms (nouns that might be code concepts)
+    const commonTerms = task.toLowerCase()
+      .split(/\s+/)
+      .filter(word =>
+        word.length > 3 &&
+        !['this', 'that', 'with', 'from', 'have', 'been', 'will', 'would', 'could', 'should', 'when', 'where', 'what', 'which', 'their', 'there', 'these', 'those', 'about', 'into', 'then', 'than', 'some', 'other', 'after', 'before'].includes(word)
+      );
+    keywords.push(...commonTerms);
+
+    // Deduplicate and return
+    return [...new Set(keywords)];
+  }
+
+  /**
+   * Build a condensed exploration brief
+   */
+  private buildExploreBrief(data: {
+    task: string;
+    focus?: string;
+    keywords: string[];
+    files: string[];
+    components: Node[];
+    routes: Node[];
+    interfaces: Node[];
+    functions: Node[];
+    callGraphInsights: string[];
+    totalSymbols: number;
+  }): string {
+    const lines: string[] = [
+      '## Exploration Brief',
+      '',
+      `**Task:** ${data.task}`,
+      `**Found:** ${data.totalSymbols} relevant symbols across ${data.files.length} files`,
+      '',
+    ];
+
+    // Key files (grouped by directory)
+    if (data.files.length > 0) {
+      lines.push('### Key Files');
+      const topFiles = data.files.slice(0, 10);
+      for (const file of topFiles) {
+        lines.push(`- ${file}`);
+      }
+      if (data.files.length > 10) {
+        lines.push(`- ... and ${data.files.length - 10} more`);
+      }
+      lines.push('');
+    }
+
+    // Entry points
+    const entryPoints: string[] = [];
+    if (data.components.length > 0) {
+      entryPoints.push(`**Components:** ${data.components.slice(0, 5).map(n => `${n.name} (${n.filePath}:${n.startLine})`).join(', ')}`);
+    }
+    if (data.routes.length > 0) {
+      entryPoints.push(`**Routes:** ${data.routes.slice(0, 5).map(n => `${n.name} (${n.filePath}:${n.startLine})`).join(', ')}`);
+    }
+    if (entryPoints.length > 0) {
+      lines.push('### Entry Points');
+      lines.push(...entryPoints);
+      lines.push('');
+    }
+
+    // Key types/interfaces
+    if (data.interfaces.length > 0) {
+      lines.push('### Key Types');
+      for (const iface of data.interfaces.slice(0, 5)) {
+        lines.push(`- **${iface.name}** - ${iface.filePath}:${iface.startLine}`);
+      }
+      lines.push('');
+    }
+
+    // Key functions
+    if (data.functions.length > 0) {
+      lines.push('### Key Functions');
+      for (const fn of data.functions.slice(0, 8)) {
+        const sig = fn.signature ? ` - \`${fn.signature.slice(0, 60)}${fn.signature.length > 60 ? '...' : ''}\`` : '';
+        lines.push(`- **${fn.name}** (${fn.filePath}:${fn.startLine})${sig}`);
+      }
+      lines.push('');
+    }
+
+    // Call graph insights
+    if (data.callGraphInsights.length > 0) {
+      lines.push('### Data Flow');
+      for (const insight of data.callGraphInsights.slice(0, 6)) {
+        lines.push(`- ${insight}`);
+      }
+      lines.push('');
+    }
+
+    // Suggested files to read (actionable)
+    lines.push('### Suggested Next Steps');
+    lines.push('Read these files for implementation details:');
+    const suggestedFiles = data.files.slice(0, 3);
+    for (const file of suggestedFiles) {
+      lines.push(`1. \`${file}\``);
+    }
+
+    return lines.join('\n');
   }
 
   // =========================================================================

@@ -139,8 +139,12 @@ CodeGraph builds a semantic knowledge graph of codebases for better code explora
 
 ### If `.codegraph/` exists in the project
 
-Use the codegraph MCP tools instead of manually searching:
+**For complex tasks (features, refactoring, multi-file changes):**
+Use `codegraph_explore` first - it does deep exploration internally and returns a condensed brief, keeping your context clean:
 
+codegraph_explore(task: "implement bundle product swapping", keywords: "bundle,swap,subscription")
+
+**For simple lookups**, use targeted tools:
 - `codegraph_search` - Find symbols by name
 - `codegraph_context` - Get context for a task/issue
 - `codegraph_callers` - Find what calls a function
@@ -149,11 +153,7 @@ Use the codegraph MCP tools instead of manually searching:
 - `codegraph_node` - Get details about a specific symbol
 - `codegraph_status` - Check index status
 
-Use these tools when:
-- Exploring unfamiliar code
-- Finding where a function is used
-- Understanding dependencies before making changes
-- Building context for bug fixes or features
+**Important:** CodeGraph provides CODE context, not product requirements. For new features, still ask the user about UX preferences, edge cases, and acceptance criteria before implementing.
 
 The index auto-updates via git post-commit hook, so no manual sync needed.
 
@@ -286,6 +286,73 @@ codegraph serve                          # Show MCP configuration help
 codegraph serve --mcp                    # Start MCP server (stdio)
 codegraph serve --mcp --path /project    # Specify project path
 ```
+
+## 🔌 MCP Tools Reference
+
+When running as an MCP server, CodeGraph exposes these tools to AI assistants:
+
+### `codegraph_explore` ⭐ Recommended for complex tasks
+
+Deep exploration that returns a condensed brief. Use this for features, refactoring, or multi-file changes to keep your main context clean.
+
+```
+codegraph_explore(task: "implement user authentication", keywords: "auth,login,user")
+```
+
+**Returns:** Key files, entry points, types, functions, data flow, and suggested next steps.
+
+### `codegraph_context`
+
+Build context for a specific task. Good for focused queries.
+
+```
+codegraph_context(task: "fix checkout validation bug", maxNodes: 20)
+```
+
+### `codegraph_search`
+
+Quick symbol search by name. Returns locations only.
+
+```
+codegraph_search(query: "UserService", kind: "class", limit: 10)
+```
+
+### `codegraph_callers` / `codegraph_callees`
+
+Find what calls a function, or what a function calls.
+
+```
+codegraph_callers(symbol: "validatePayment", limit: 20)
+codegraph_callees(symbol: "processOrder", limit: 20)
+```
+
+### `codegraph_impact`
+
+Analyze what code would be affected by changing a symbol.
+
+```
+codegraph_impact(symbol: "UserService", depth: 2)
+```
+
+### `codegraph_node`
+
+Get details about a specific symbol. Use `includeCode: true` only when needed.
+
+```
+codegraph_node(symbol: "authenticate", includeCode: true)
+```
+
+### `codegraph_status`
+
+Check index health and statistics.
+
+### Context Usage Best Practices
+
+| Approach | Context Impact | When to Use |
+|----------|----------------|-------------|
+| `codegraph_explore` | **Low** - condensed summary | Complex features, refactoring |
+| Multiple tool calls | **High** - each result accumulates | Avoid for complex tasks |
+| `codegraph_context` | **Medium** | Focused, single-area queries |
 
 ## 📚 Library Usage
 

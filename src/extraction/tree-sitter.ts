@@ -19,6 +19,9 @@ import { getParser, detectLanguage, isLanguageSupported } from './grammars';
 
 /**
  * Generate a unique node ID
+ *
+ * Uses a 32-character (128-bit) hash to avoid collisions when indexing
+ * large codebases with many files containing similar symbols.
  */
 export function generateNodeId(
   filePath: string,
@@ -30,7 +33,7 @@ export function generateNodeId(
     .createHash('sha256')
     .update(`${filePath}:${kind}:${name}:${line}`)
     .digest('hex')
-    .substring(0, 16);
+    .substring(0, 32);
   return `${kind}:${hash}`;
 }
 
