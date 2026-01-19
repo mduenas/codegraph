@@ -172,7 +172,7 @@ For each project you want to use CodeGraph with:
 
 ```bash
 cd your-project
-codegraph init -i
+npx @colbymchenry/codegraph init -i
 ```
 
 That's it! Claude Code will now use CodeGraph tools automatically when a `.codegraph/` directory exists.
