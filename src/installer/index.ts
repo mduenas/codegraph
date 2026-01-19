@@ -8,7 +8,7 @@
 import { execSync } from 'child_process';
 import { showBanner, showNextSteps, success, error, info, chalk } from './banner';
 import { promptInstallLocation, promptAutoAllow, InstallLocation } from './prompts';
-import { writeMcpConfig, writePermissions, hasMcpConfig, hasPermissions } from './config-writer';
+import { writeMcpConfig, writePermissions, writeClaudeMd, hasMcpConfig, hasPermissions } from './config-writer';
 import CodeGraph from '../index';
 
 /**
@@ -66,7 +66,19 @@ export async function runInstaller(): Promise<void> {
       }
     }
 
-    // Step 5: For local install, initialize the project
+    // Step 5: Write CLAUDE.md instructions
+    const claudeMdResult = writeClaudeMd(location);
+    const claudeMdPath = location === 'global' ? '~/.claude/CLAUDE.md' : './.claude/CLAUDE.md';
+
+    if (claudeMdResult.created) {
+      success(`Created ${claudeMdPath} with CodeGraph instructions`);
+    } else if (claudeMdResult.updated) {
+      success(`Updated CodeGraph section in ${claudeMdPath}`);
+    } else {
+      success(`Added CodeGraph instructions to ${claudeMdPath}`);
+    }
+
+    // Step 6: For local install, initialize the project
     if (location === 'local') {
       await initializeLocalProject();
     }
