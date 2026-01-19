@@ -5,12 +5,22 @@
  * Uses ONNX runtime under the hood for fast local inference.
  */
 
-import { pipeline, env } from '@xenova/transformers';
 import * as path from 'path';
 import * as fs from 'fs';
 
+// Dynamic import for @xenova/transformers (ESM-only package)
+// We use dynamic import to support CommonJS builds
+let transformersModule: typeof import('@xenova/transformers') | null = null;
+
+async function getTransformers() {
+  if (!transformersModule) {
+    transformersModule = await import('@xenova/transformers');
+  }
+  return transformersModule;
+}
+
 // Type for the feature extraction pipeline
-type FeatureExtractionPipeline = Awaited<ReturnType<typeof pipeline<'feature-extraction'>>>;
+type FeatureExtractionPipeline = any;
 
 /**
  * Default model for embeddings
@@ -92,6 +102,9 @@ export class TextEmbedder {
     if (this.initialized) {
       return;
     }
+
+    // Load transformers.js dynamically (ESM-only package)
+    const { pipeline, env } = await getTransformers();
 
     // Configure transformers.js to use local cache
     env.cacheDir = this.cacheDir;
