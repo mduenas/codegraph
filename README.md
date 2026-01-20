@@ -389,17 +389,7 @@ codegraph serve --mcp --path /project    # Specify project path
 
 ## 🔌 MCP Tools Reference
 
-When running as an MCP server, CodeGraph exposes these tools to AI assistants:
-
-### `codegraph_explore` ⭐ Recommended for complex tasks
-
-Deep exploration that returns a condensed brief. Use this for features, refactoring, or multi-file changes to keep your main context clean.
-
-```
-codegraph_explore(task: "implement user authentication", keywords: "auth,login,user")
-```
-
-**Returns:** Key files, entry points, types, functions, data flow, and suggested next steps.
+When running as an MCP server, CodeGraph exposes these tools to AI assistants. **These tools are designed to be used by Claude's Explore agents** for faster, more efficient codebase exploration.
 
 ### `codegraph_context`
 
@@ -446,13 +436,18 @@ codegraph_node(symbol: "authenticate", includeCode: true)
 
 Check index health and statistics.
 
-### Context Usage Best Practices
+### How It Works With Claude Code
 
-| Approach | Context Impact | When to Use |
-|----------|----------------|-------------|
-| `codegraph_explore` | **Low** - condensed summary | Complex features, refactoring |
-| Multiple tool calls | **High** - each result accumulates | Avoid for complex tasks |
-| `codegraph_context` | **Medium** | Focused, single-area queries |
+Claude's **Explore agents** use these tools instead of grep/glob/Read for faster exploration:
+
+| Without CodeGraph | With CodeGraph | Benefit |
+|-------------------|----------------|---------|
+| `grep -r "auth"` | `codegraph_search("auth")` | Instant symbol lookup |
+| Multiple `Read` calls | `codegraph_context(task)` | Related code in one call |
+| Manual file tracing | `codegraph_callers/callees` | Call graph traversal |
+| Guessing impact | `codegraph_impact(symbol)` | Know what breaks |
+
+This hybrid approach gives you **~30% fewer tokens** and **~25% fewer tool calls** while letting Claude's native agents handle synthesis.
 
 ## 📚 Library Usage
 

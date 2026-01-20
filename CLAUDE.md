@@ -122,26 +122,16 @@ codegraph serve --mcp       # Start MCP server
 
 ## MCP Tools Best Practices
 
-When using CodeGraph MCP tools, follow these guidelines to minimize context usage:
+These tools are designed to be used by **Explore agents** for faster codebase exploration:
 
-### For Complex Tasks (features, refactoring, architecture)
-Use `codegraph_explore` - it does intensive exploration internally and returns a condensed brief:
-```
-codegraph_explore(task: "implement user authentication with OAuth")
-```
-This replaces multiple tool calls and keeps your main context clean.
-
-### For Simple Lookups
-Use targeted tools directly:
-- `codegraph_search` - Find symbols by name
-- `codegraph_node` - Get details about one symbol
-- `codegraph_callers/callees` - Understand usage patterns
-
-### Context Usage Comparison
-| Approach | Context Impact |
-|----------|---------------|
-| Multiple `codegraph_*` calls | High - each result stays in context |
-| Single `codegraph_explore` | Low - returns condensed summary |
+| Tool | Use For |
+|------|---------|
+| `codegraph_search` | Find symbols by name (functions, classes, types) |
+| `codegraph_context` | Get relevant code context for a task |
+| `codegraph_callers` | Find what calls a function |
+| `codegraph_callees` | Find what a function calls |
+| `codegraph_impact` | See what's affected by changing a symbol |
+| `codegraph_node` | Get details + source code for a symbol |
 
 ### Important
 CodeGraph provides **code context**, not product requirements. For new features, still ask the user about:
