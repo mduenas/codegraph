@@ -26,16 +26,26 @@ export async function runInstaller(): Promise<void> {
   showBanner();
 
   try {
-    // Step 1: Install codegraph globally
-    console.log(chalk.dim('  Installing codegraph globally...'));
+    // Step 1: Check if codegraph is available (skip install if already there)
+    let codegraphAvailable = false;
     try {
-      execSync('npm install -g @colbymchenry/codegraph', { stdio: 'pipe' });
-      success('Installed codegraph command globally');
+      execSync('which codegraph', { stdio: 'pipe' });
+      codegraphAvailable = true;
     } catch {
-      // May fail if no permissions, but that's ok - npx still works
-      info('Could not install globally (try with sudo if needed)');
+      // Not installed globally yet
     }
-    console.log();
+
+    if (!codegraphAvailable) {
+      console.log(chalk.dim('  Installing codegraph globally...'));
+      try {
+        execSync('npm install -g @colbymchenry/codegraph', { stdio: 'pipe' });
+        success('Installed codegraph command globally');
+      } catch {
+        // May fail if no permissions, but that's ok - npx still works
+        info('Could not install globally (try with sudo if needed)');
+      }
+      console.log();
+    }
 
     // Step 2: Ask for installation location
     const location = await promptInstallLocation();
