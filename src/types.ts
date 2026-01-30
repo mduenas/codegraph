@@ -484,6 +484,11 @@ export const DEFAULT_CONFIG: CodeGraphConfig = {
     '**/*.rs',
     // Java
     '**/*.java',
+    // Kotlin
+    '**/*.kt',
+    '**/*.kts',
+    // Swift
+    '**/*.swift',
     // C/C++
     '**/*.c',
     '**/*.h',
