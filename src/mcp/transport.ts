@@ -1,7 +1,8 @@
 /**
- * MCP Stdio Transport
+ * MCP Transport Layer
  *
- * Handles JSON-RPC 2.0 communication over stdin/stdout for MCP protocol.
+ * Handles JSON-RPC 2.0 communication for MCP protocol.
+ * Supports multiple transport mechanisms (stdio, HTTP).
  */
 
 import * as readline from 'readline';
@@ -56,11 +57,50 @@ export const ErrorCodes = {
 export type MessageHandler = (message: JsonRpcRequest | JsonRpcNotification) => Promise<void>;
 
 /**
+ * Transport Interface
+ *
+ * Abstract interface that all transport implementations must follow.
+ * Enables pluggable transport mechanisms for the MCP server.
+ */
+export interface ITransport {
+  /**
+   * Start the transport and begin listening for messages
+   */
+  start(handler: MessageHandler): void;
+
+  /**
+   * Stop the transport and clean up resources
+   */
+  stop(): void;
+
+  /**
+   * Send a JSON-RPC response
+   */
+  send(response: JsonRpcResponse): void;
+
+  /**
+   * Send a notification (no id expected in response)
+   */
+  notify(method: string, params?: unknown): void;
+
+  /**
+   * Send a success result
+   */
+  sendResult(id: string | number, result: unknown): void;
+
+  /**
+   * Send an error response
+   */
+  sendError(id: string | number | null, code: number, message: string, data?: unknown): void;
+}
+
+/**
  * Stdio Transport for MCP
  *
  * Reads JSON-RPC messages from stdin and writes responses to stdout.
+ * Used for direct process communication (e.g., Claude Code integration).
  */
-export class StdioTransport {
+export class StdioTransport implements ITransport {
   private rl: readline.Interface | null = null;
   private messageHandler: MessageHandler | null = null;
 

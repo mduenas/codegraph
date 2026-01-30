@@ -10,13 +10,22 @@
  * ```typescript
  * import { MCPServer } from 'codegraph';
  *
+ * // Stdio transport (default, for Claude Code)
  * const server = new MCPServer('/path/to/project');
  * await server.start();
+ *
+ * // HTTP transport (for GitHub Copilot)
+ * const httpServer = new MCPServer('/path/to/project', {
+ *   transport: 'http',
+ *   port: 3000,
+ * });
+ * await httpServer.start();
  * ```
  */
 
 import CodeGraph from '../index';
-import { StdioTransport, JsonRpcRequest, JsonRpcNotification, ErrorCodes } from './transport';
+import { ITransport, StdioTransport, JsonRpcRequest, JsonRpcNotification, ErrorCodes } from './transport';
+import { HttpTransport } from './http-transport';
 import { tools, ToolHandler } from './tools';
 
 /**
@@ -33,21 +42,50 @@ const SERVER_INFO = {
 const PROTOCOL_VERSION = '2024-11-05';
 
 /**
+ * MCP Server Configuration
+ */
+export interface MCPServerConfig {
+  /** Transport type: 'stdio' (default) or 'http' */
+  transport?: 'stdio' | 'http';
+  /** HTTP port (only for http transport, default: 3000) */
+  port?: number;
+  /** HTTP host (only for http transport, default: 'localhost') */
+  host?: string;
+  /** CORS origins (only for http transport, default: '*') */
+  corsOrigins?: string | string[];
+}
+
+/**
  * MCP Server for CodeGraph
  *
  * Implements the Model Context Protocol to expose CodeGraph
  * functionality as tools that can be called by AI assistants.
+ *
+ * Supports multiple transport mechanisms:
+ * - stdio: For direct process communication (Claude Code)
+ * - http: For HTTP-based clients (GitHub Copilot)
  */
 export class MCPServer {
-  private transport: StdioTransport;
+  private transport: ITransport;
+  private transportType: 'stdio' | 'http';
   private cg: CodeGraph | null = null;
   private toolHandler: ToolHandler | null = null;
   private projectPath: string | null;
   private initError: string | null = null;
 
-  constructor(projectPath?: string) {
+  constructor(projectPath?: string, config: MCPServerConfig = {}) {
     this.projectPath = projectPath || null;
-    this.transport = new StdioTransport();
+    this.transportType = config.transport || 'stdio';
+
+    if (this.transportType === 'http') {
+      this.transport = new HttpTransport({
+        port: config.port,
+        host: config.host,
+        corsOrigins: config.corsOrigins,
+      });
+    } else {
+      this.transport = new StdioTransport();
+    }
   }
 
   /**
@@ -95,7 +133,12 @@ export class MCPServer {
       this.cg = null;
     }
     this.transport.stop();
-    process.exit(0);
+
+    // Only exit process for stdio transport (where stdin close means we should exit)
+    // HTTP transport should stop gracefully without terminating the process
+    if (this.transportType === 'stdio') {
+      process.exit(0);
+    }
   }
 
   /**
@@ -244,6 +287,7 @@ export class MCPServer {
   }
 }
 
-// Export for use in CLI
-export { StdioTransport } from './transport';
+// Export for use in CLI and external consumers
+export { ITransport, StdioTransport } from './transport';
+export { HttpTransport, HttpTransportConfig } from './http-transport';
 export { tools, ToolHandler } from './tools';

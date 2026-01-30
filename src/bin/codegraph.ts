@@ -696,16 +696,45 @@ program
   .command('serve')
   .description('Start CodeGraph as an MCP server for AI assistants')
   .option('-p, --path <path>', 'Project path (optional for MCP mode, uses rootUri from client)')
-  .option('--mcp', 'Run as MCP server (stdio transport)')
-  .action(async (options: { path?: string; mcp?: boolean }) => {
+  .option('--mcp', 'Run as MCP server (stdio transport, default)')
+  .option('--http', 'Use HTTP transport instead of stdio (for GitHub Copilot)')
+  .option('--port <number>', 'HTTP server port (default: 3000)', '3000')
+  .option('--host <host>', 'HTTP server host (default: localhost)', 'localhost')
+  .action(async (options: { path?: string; mcp?: boolean; http?: boolean; port?: string; host?: string }) => {
     const projectPath = options.path ? resolveProjectPath(options.path) : undefined;
 
     try {
-      if (options.mcp) {
+      if (options.mcp || options.http) {
         // Start MCP server - it handles initialization lazily based on rootUri from client
         const { MCPServer } = await import('../mcp/index');
-        const server = new MCPServer(projectPath);
-        await server.start();
+
+        if (options.http) {
+          // HTTP transport mode for GitHub Copilot
+          const port = parseInt(options.port || '3000', 10);
+          const host = options.host || 'localhost';
+
+          const server = new MCPServer(projectPath, {
+            transport: 'http',
+            port,
+            host,
+          });
+          await server.start();
+
+          // Keep the process running
+          process.on('SIGINT', () => {
+            console.error('\n[codegraph] Shutting down...');
+            server.stop();
+            process.exit(0);
+          });
+          process.on('SIGTERM', () => {
+            server.stop();
+            process.exit(0);
+          });
+        } else {
+          // Stdio transport mode (default)
+          const server = new MCPServer(projectPath);
+          await server.start();
+        }
         // Server will run until terminated
       } else {
         // Default: show info about MCP mode
@@ -718,6 +747,20 @@ program
     "codegraph": {
       "command": "codegraph",
       "args": ["serve", "--mcp"]
+    }
+  }
+}
+`));
+        console.log('\nTo use with GitHub Copilot (HTTP mode):');
+        console.log(chalk.dim(`
+  codegraph serve --mcp --http --port 3000
+
+Then configure in your MCP settings:
+{
+  "mcpServers": {
+    "codegraph": {
+      "type": "http",
+      "url": "http://localhost:3000/mcp"
     }
   }
 }
