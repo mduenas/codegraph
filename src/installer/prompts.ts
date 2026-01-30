@@ -38,8 +38,8 @@ export async function promptAIAssistant(): Promise<AIAssistant> {
 
   console.log(chalk.bold('  Which AI assistant will you use?'));
   console.log();
-  console.log('  1) Claude Code - stdio transport (default)');
-  console.log('  2) GitHub Copilot - HTTP transport');
+  console.log('  1) Claude Code (default)');
+  console.log('  2) GitHub Copilot');
   console.log('  3) Both');
   console.log();
 

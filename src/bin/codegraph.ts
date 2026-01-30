@@ -751,16 +751,15 @@ program
   }
 }
 `));
-        console.log('\nTo use with GitHub Copilot (HTTP mode):');
+        console.log('\nTo use with GitHub Copilot (.copilot/mcp-config.json):');
         console.log(chalk.dim(`
-  codegraph serve --mcp --http --port 3000
-
-Then configure in your MCP settings:
 {
   "mcpServers": {
     "codegraph": {
-      "type": "http",
-      "url": "http://localhost:3000/mcp"
+      "type": "stdio",
+      "command": "codegraph",
+      "args": ["serve", "--mcp"],
+      "tools": ["*"]
     }
   }
 }

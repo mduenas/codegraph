@@ -129,15 +129,14 @@ export function showNextSteps(location: 'global' | 'local', assistant: 'claude' 
   } else if (assistant === 'copilot') {
     console.log(chalk.bold('  Done!') + ' CodeGraph is ready for GitHub Copilot.');
     console.log();
-    console.log(chalk.dim('  To start the HTTP server:'));
-    console.log(chalk.cyan('    codegraph serve --mcp --http --port 3000'));
-    console.log();
-    console.log(chalk.dim('  Then add to your MCP configuration:'));
+    console.log(chalk.dim('  Add to .copilot/mcp-config.json (or .vscode/mcp.json):'));
     console.log(chalk.gray('    {'));
     console.log(chalk.gray('      "mcpServers": {'));
     console.log(chalk.gray('        "codegraph": {'));
-    console.log(chalk.gray('          "type": "http",'));
-    console.log(chalk.gray('          "url": "http://localhost:3000/mcp"'));
+    console.log(chalk.gray('          "type": "stdio",'));
+    console.log(chalk.gray('          "command": "codegraph",'));
+    console.log(chalk.gray('          "args": ["serve", "--mcp"],'));
+    console.log(chalk.gray('          "tools": ["*"]'));
     console.log(chalk.gray('        }'));
     console.log(chalk.gray('      }'));
     console.log(chalk.gray('    }'));
@@ -151,9 +150,10 @@ export function showNextSteps(location: 'global' | 'local', assistant: 'claude' 
     }
     console.log(chalk.dim('    Restart Claude Code - it will auto-connect via stdio'));
     console.log();
-    console.log(chalk.dim('  For GitHub Copilot:'));
-    console.log(chalk.cyan('    codegraph serve --mcp --http --port 3000'));
-    console.log(chalk.dim('    Then configure MCP with: ') + chalk.gray('http://localhost:3000/mcp'));
+    console.log(chalk.dim('  For GitHub Copilot, add to .copilot/mcp-config.json:'));
+    console.log(chalk.gray('    { "mcpServers": { "codegraph": {'));
+    console.log(chalk.gray('        "type": "stdio", "command": "codegraph",'));
+    console.log(chalk.gray('        "args": ["serve", "--mcp"], "tools": ["*"] }}}'));
   }
   console.log();
 }
