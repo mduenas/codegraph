@@ -530,6 +530,269 @@ suspend fun loadData(): List<String> {
     expect(funcNode).toBeDefined();
     expect(funcNode?.isAsync).toBe(true);
   });
+
+  it('should extract data classes', () => {
+    const code = `
+data class User(val id: String, val name: String, val email: String)
+
+data class Product(
+    val id: Long,
+    val name: String,
+    val price: Double
+)
+`;
+    const result = extractFromSource('models.kt', code);
+
+    const classes = result.nodes.filter((n) => n.kind === 'class');
+    expect(classes.length).toBeGreaterThanOrEqual(2);
+    expect(classes.some((c) => c.name === 'User')).toBe(true);
+    expect(classes.some((c) => c.name === 'Product')).toBe(true);
+  });
+
+  it('should extract sealed classes with subclasses', () => {
+    const code = `
+sealed class Result {
+    data class Success(val value: String) : Result()
+    data class Error(val message: String) : Result()
+    object Loading : Result()
+}
+`;
+    const result = extractFromSource('result.kt', code);
+
+    const resultClass = result.nodes.find((n) => n.kind === 'class' && n.name === 'Result');
+    expect(resultClass).toBeDefined();
+
+    // Should also extract nested classes
+    const successClass = result.nodes.find((n) => n.kind === 'class' && n.name === 'Success');
+    const errorClass = result.nodes.find((n) => n.kind === 'class' && n.name === 'Error');
+    expect(successClass).toBeDefined();
+    expect(errorClass).toBeDefined();
+  });
+
+  it('should extract object declarations (singletons)', () => {
+    const code = `
+object DatabaseConfig {
+    const val URL = "jdbc:mysql://localhost:3306/mydb"
+    const val MAX_CONNECTIONS = 10
+
+    fun connect(): Connection {
+        return DriverManager.getConnection(URL)
+    }
+}
+`;
+    const result = extractFromSource('config.kt', code);
+
+    const objectNode = result.nodes.find((n) => n.kind === 'class' && n.name === 'DatabaseConfig');
+    expect(objectNode).toBeDefined();
+
+    // Check for method inside object
+    const connectMethod = result.nodes.find((n) => n.kind === 'method' && n.name === 'connect');
+    expect(connectMethod).toBeDefined();
+  });
+
+  it('should extract companion objects', () => {
+    const code = `
+class Factory private constructor(val value: Int) {
+    companion object {
+        fun create(): Factory = Factory(42)
+        fun createWithValue(v: Int): Factory = Factory(v)
+    }
+}
+`;
+    const result = extractFromSource('factory.kt', code);
+
+    const factoryClass = result.nodes.find((n) => n.kind === 'class' && n.name === 'Factory');
+    expect(factoryClass).toBeDefined();
+
+    // Check for companion object
+    const companionNode = result.nodes.find((n) => n.kind === 'class' && n.name === 'Companion');
+    expect(companionNode).toBeDefined();
+
+    // Check for methods in companion object
+    const createMethod = result.nodes.find((n) => n.kind === 'method' && n.name === 'create');
+    expect(createMethod).toBeDefined();
+  });
+
+  it('should extract interfaces', () => {
+    const code = `
+interface Repository<T> {
+    fun findById(id: String): T?
+    fun findAll(): List<T>
+    suspend fun save(entity: T)
+    suspend fun delete(id: String)
+}
+
+interface UserRepository : Repository<User> {
+    fun findByEmail(email: String): User?
+}
+`;
+    const result = extractFromSource('repository.kt', code);
+
+    const interfaces = result.nodes.filter((n) => n.kind === 'interface');
+    expect(interfaces.length).toBeGreaterThanOrEqual(2);
+    expect(interfaces.some((i) => i.name === 'Repository')).toBe(true);
+    expect(interfaces.some((i) => i.name === 'UserRepository')).toBe(true);
+  });
+
+  it('should extract enums with members and methods', () => {
+    const code = `
+enum class Status {
+    PENDING,
+    ACTIVE,
+    COMPLETED;
+
+    fun isTerminal(): Boolean = this == COMPLETED
+
+    companion object {
+        fun fromString(s: String): Status = valueOf(s)
+    }
+}
+`;
+    const result = extractFromSource('status.kt', code);
+
+    const enumNode = result.nodes.find((n) => n.kind === 'enum' && n.name === 'Status');
+    expect(enumNode).toBeDefined();
+
+    // Check for enum members
+    const enumMembers = result.nodes.filter((n) => n.kind === 'enum_member');
+    expect(enumMembers.length).toBeGreaterThanOrEqual(3);
+    expect(enumMembers.some((m) => m.name === 'PENDING')).toBe(true);
+    expect(enumMembers.some((m) => m.name === 'ACTIVE')).toBe(true);
+    expect(enumMembers.some((m) => m.name === 'COMPLETED')).toBe(true);
+  });
+
+  it('should extract extension functions', () => {
+    const code = `
+fun String.toSlug(): String {
+    return this.lowercase().replace(" ", "-")
+}
+
+fun List<Int>.average(): Double {
+    return this.sum().toDouble() / this.size
+}
+
+suspend fun <T> T.async(block: suspend () -> Unit) {
+    block()
+}
+`;
+    const result = extractFromSource('extensions.kt', code);
+
+    const functions = result.nodes.filter((n) => n.kind === 'function');
+    expect(functions.length).toBeGreaterThanOrEqual(2);
+    expect(functions.some((f) => f.name === 'toSlug')).toBe(true);
+    expect(functions.some((f) => f.name === 'average')).toBe(true);
+  });
+
+  it('should extract properties (val/var)', () => {
+    const code = `
+class Config {
+    val readOnly: String = "immutable"
+    var mutable: Int = 0
+    private val secret: String = "hidden"
+
+    val computed: Int
+        get() = mutable * 2
+}
+`;
+    const result = extractFromSource('config.kt', code);
+
+    const properties = result.nodes.filter((n) => n.kind === 'property' || n.kind === 'constant');
+    expect(properties.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('should extract type aliases', () => {
+    const code = `
+typealias UserId = String
+typealias UserMap = Map<UserId, User>
+typealias Predicate<T> = (T) -> Boolean
+typealias Handler = suspend (Request) -> Response
+`;
+    const result = extractFromSource('types.kt', code);
+
+    const typeAliases = result.nodes.filter((n) => n.kind === 'type_alias');
+    expect(typeAliases.length).toBeGreaterThanOrEqual(4);
+    expect(typeAliases.some((t) => t.name === 'UserId')).toBe(true);
+    expect(typeAliases.some((t) => t.name === 'UserMap')).toBe(true);
+    expect(typeAliases.some((t) => t.name === 'Predicate')).toBe(true);
+    expect(typeAliases.some((t) => t.name === 'Handler')).toBe(true);
+  });
+
+  it('should extract class inheritance relationships', () => {
+    const code = `
+open class Animal(val name: String)
+
+class Dog(name: String, val breed: String) : Animal(name), Comparable<Dog> {
+    override fun compareTo(other: Dog): Int = name.compareTo(other.name)
+}
+
+class Cat(name: String) : Animal(name)
+`;
+    const result = extractFromSource('animals.kt', code);
+
+    const dogClass = result.nodes.find((n) => n.kind === 'class' && n.name === 'Dog');
+    expect(dogClass).toBeDefined();
+
+    // Check for inheritance edges
+    const extendsRefs = result.unresolvedReferences.filter((r) => r.referenceKind === 'extends');
+    const implementsRefs = result.unresolvedReferences.filter((r) => r.referenceKind === 'implements');
+
+    expect(extendsRefs.some((r) => r.referenceName === 'Animal')).toBe(true);
+    expect(implementsRefs.some((r) => r.referenceName.includes('Comparable'))).toBe(true);
+  });
+
+  it('should extract visibility modifiers', () => {
+    const code = `
+class MyClass {
+    public fun publicMethod() {}
+    private fun privateMethod() {}
+    protected fun protectedMethod() {}
+    internal fun internalMethod() {}
+}
+`;
+    const result = extractFromSource('visibility.kt', code);
+
+    const methods = result.nodes.filter((n) => n.kind === 'method');
+
+    const publicMethod = methods.find((m) => m.name === 'publicMethod');
+    const privateMethod = methods.find((m) => m.name === 'privateMethod');
+    const internalMethod = methods.find((m) => m.name === 'internalMethod');
+
+    expect(publicMethod?.visibility).toBe('public');
+    expect(privateMethod?.visibility).toBe('private');
+    expect(internalMethod?.visibility).toBe('internal');
+  });
+
+  it('should extract abstract classes', () => {
+    const code = `
+abstract class Shape {
+    abstract fun area(): Double
+    abstract fun perimeter(): Double
+
+    fun describe(): String = "I am a shape"
+}
+`;
+    const result = extractFromSource('shape.kt', code);
+
+    const shapeClass = result.nodes.find((n) => n.kind === 'class' && n.name === 'Shape');
+    expect(shapeClass).toBeDefined();
+    expect(shapeClass?.isAbstract).toBe(true);
+  });
+
+  it('should track function calls', () => {
+    const code = `
+fun main() {
+    val result = processData()
+    println(result)
+    saveToDatabase(result)
+}
+`;
+    const result = extractFromSource('main.kt', code);
+
+    const calls = result.unresolvedReferences.filter((r) => r.referenceKind === 'calls');
+    expect(calls.some((c) => c.referenceName === 'processData')).toBe(true);
+    expect(calls.some((c) => c.referenceName === 'println')).toBe(true);
+    expect(calls.some((c) => c.referenceName === 'saveToDatabase')).toBe(true);
+  });
 });
 
 describe('Full Indexing', () => {

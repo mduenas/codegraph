@@ -45,10 +45,23 @@ function getNodeText(node: SyntaxNode, source: string): string {
 }
 
 /**
- * Find a child node by field name
+ * Find a child node by field name, with fallback to finding by type
  */
 function getChildByField(node: SyntaxNode, fieldName: string): SyntaxNode | null {
-  return node.childForFieldName(fieldName);
+  // First try the field name
+  const byField = node.childForFieldName(fieldName);
+  if (byField) return byField;
+
+  // Fall back to finding a named child with matching type (for languages like Kotlin
+  // where tree-sitter doesn't define fields for some node types)
+  for (let i = 0; i < node.namedChildCount; i++) {
+    const child = node.namedChild(i);
+    if (child?.type === fieldName) {
+      return child;
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -126,6 +139,59 @@ interface LanguageExtractor {
   /** Check if node is static */
   isStatic?: (node: SyntaxNode) => boolean;
 }
+
+// =============================================================================
+// Kotlin-specific Helper Functions
+// =============================================================================
+
+/**
+ * Check if a Kotlin node has a specific modifier
+ */
+function kotlinHasModifier(node: SyntaxNode, modifier: string): boolean {
+  for (let i = 0; i < node.childCount; i++) {
+    const child = node.child(i);
+    if (child?.type === 'modifiers' && child.text.includes(modifier)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Check if a Kotlin class_declaration is actually an interface
+ */
+function isKotlinInterface(node: SyntaxNode): boolean {
+  // Look for 'interface' keyword (not 'class')
+  for (let i = 0; i < node.childCount; i++) {
+    const child = node.child(i);
+    if (child?.type === 'interface') {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Check if a Kotlin class_declaration is an enum
+ */
+function isKotlinEnum(node: SyntaxNode): boolean {
+  // Look for 'enum' child node (it's a direct child, not inside modifiers)
+  for (let i = 0; i < node.childCount; i++) {
+    const child = node.child(i);
+    if (child?.type === 'enum') {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Check if a Kotlin class is abstract
+ */
+function isKotlinAbstractClass(node: SyntaxNode): boolean {
+  return kotlinHasModifier(node, 'abstract');
+}
+
 
 /**
  * Language-specific extractors
@@ -571,7 +637,7 @@ const EXTRACTORS: Partial<Record<Language, LanguageExtractor>> = {
   },
   kotlin: {
     functionTypes: ['function_declaration'],
-    classTypes: ['class_declaration'],
+    classTypes: ['class_declaration', 'object_declaration'],
     methodTypes: ['function_declaration'], // Methods are functions inside classes
     interfaceTypes: ['class_declaration'], // Interfaces use class_declaration with 'interface' modifier
     structTypes: [], // Kotlin uses data classes
@@ -768,10 +834,37 @@ export class TreeSitterExtractor {
         this.extractStruct(node);
       } else if (this.language === 'swift' && this.hasChildOfType(node, 'enum')) {
         this.extractEnum(node);
+      }
+      // Kotlin uses class_declaration for classes, interfaces, and enums
+      else if (this.language === 'kotlin' && nodeType === 'class_declaration') {
+        if (isKotlinInterface(node)) {
+          this.extractInterface(node);
+        } else if (isKotlinEnum(node)) {
+          this.extractKotlinEnum(node);
+        } else {
+          this.extractKotlinClass(node);
+        }
+      }
+      // Kotlin object_declaration (singleton objects)
+      else if (this.language === 'kotlin' && nodeType === 'object_declaration') {
+        this.extractKotlinObject(node);
       } else {
         this.extractClass(node);
       }
       skipChildren = true; // extractClass visits body children
+    }
+    // Kotlin companion_object
+    else if (this.language === 'kotlin' && nodeType === 'companion_object') {
+      this.extractKotlinCompanionObject(node);
+      skipChildren = true;
+    }
+    // Kotlin property_declaration
+    else if (this.language === 'kotlin' && nodeType === 'property_declaration') {
+      this.extractKotlinProperty(node);
+    }
+    // Kotlin type_alias
+    else if (this.language === 'kotlin' && nodeType === 'type_alias') {
+      this.extractKotlinTypeAlias(node);
     }
     // Check for method declarations (only if not already handled by functionTypes)
     else if (this.extractor.methodTypes.includes(nodeType)) {
@@ -1209,6 +1302,302 @@ export class TreeSitterExtractor {
               line: iface.startPosition.row + 1,
               column: iface.startPosition.column,
             });
+          }
+        }
+      }
+    }
+  }
+
+  // =============================================================================
+  // Kotlin-specific Extraction Methods
+  // =============================================================================
+
+  /**
+   * Extract a Kotlin class with enhanced metadata (data, sealed, abstract)
+   */
+  private extractKotlinClass(node: SyntaxNode): void {
+    if (!this.extractor) return;
+
+    const name = extractName(node, this.source, this.extractor);
+    const docstring = getPrecedingDocstring(node, this.source);
+    const visibility = this.extractor.getVisibility?.(node);
+
+    // Determine class modifiers
+    const isAbstractClass = isKotlinAbstractClass(node);
+
+    const classNode = this.createNode('class', name, node, {
+      docstring,
+      visibility,
+      isAbstract: isAbstractClass,
+    });
+
+    // Extract inheritance (delegation specifiers in Kotlin)
+    this.extractKotlinInheritance(node, classNode.id);
+
+    // Push to stack and visit body
+    this.nodeStack.push(classNode.id);
+
+    // Find class_body child
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child?.type === 'class_body' || child?.type === 'enum_class_body') {
+        for (let j = 0; j < child.namedChildCount; j++) {
+          const bodyChild = child.namedChild(j);
+          if (bodyChild) {
+            this.visitNode(bodyChild);
+          }
+        }
+      }
+    }
+
+    this.nodeStack.pop();
+  }
+
+  /**
+   * Extract a Kotlin enum class
+   */
+  private extractKotlinEnum(node: SyntaxNode): void {
+    if (!this.extractor) return;
+
+    const name = extractName(node, this.source, this.extractor);
+    const docstring = getPrecedingDocstring(node, this.source);
+    const visibility = this.extractor.getVisibility?.(node);
+
+    const enumNode = this.createNode('enum', name, node, {
+      docstring,
+      visibility,
+    });
+
+    // Extract inheritance
+    this.extractKotlinInheritance(node, enumNode.id);
+
+    // Push to stack and visit body for enum entries and methods
+    this.nodeStack.push(enumNode.id);
+
+    // Find enum_class_body child
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child?.type === 'enum_class_body') {
+        for (let j = 0; j < child.namedChildCount; j++) {
+          const bodyChild = child.namedChild(j);
+          if (bodyChild) {
+            // Extract enum entries
+            if (bodyChild.type === 'enum_entry') {
+              this.extractKotlinEnumEntry(bodyChild);
+            } else {
+              this.visitNode(bodyChild);
+            }
+          }
+        }
+      }
+    }
+
+    this.nodeStack.pop();
+  }
+
+  /**
+   * Extract a Kotlin enum entry
+   */
+  private extractKotlinEnumEntry(node: SyntaxNode): void {
+    // Find the simple_identifier for the enum entry name
+    let name = '<unknown>';
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child?.type === 'simple_identifier') {
+        name = getNodeText(child, this.source);
+        break;
+      }
+    }
+
+    this.createNode('enum_member', name, node, {});
+  }
+
+  /**
+   * Extract a Kotlin object declaration (singleton)
+   */
+  private extractKotlinObject(node: SyntaxNode): void {
+    if (!this.extractor) return;
+
+    const name = extractName(node, this.source, this.extractor);
+    const docstring = getPrecedingDocstring(node, this.source);
+    const visibility = this.extractor.getVisibility?.(node);
+
+    const objectNode = this.createNode('class', name, node, {
+      docstring,
+      visibility,
+    });
+
+    // Extract inheritance
+    this.extractKotlinInheritance(node, objectNode.id);
+
+    // Push to stack and visit body
+    this.nodeStack.push(objectNode.id);
+
+    // Find class_body child
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child?.type === 'class_body') {
+        for (let j = 0; j < child.namedChildCount; j++) {
+          const bodyChild = child.namedChild(j);
+          if (bodyChild) {
+            this.visitNode(bodyChild);
+          }
+        }
+      }
+    }
+
+    this.nodeStack.pop();
+  }
+
+  /**
+   * Extract a Kotlin companion object
+   */
+  private extractKotlinCompanionObject(node: SyntaxNode): void {
+    if (!this.extractor) return;
+
+    // Companion objects may or may not have a name
+    let name = 'Companion';
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child?.type === 'simple_identifier') {
+        name = getNodeText(child, this.source);
+        break;
+      }
+    }
+
+    const docstring = getPrecedingDocstring(node, this.source);
+    const visibility = this.extractor.getVisibility?.(node);
+
+    const companionNode = this.createNode('class', name, node, {
+      docstring,
+      visibility,
+      isStatic: true, // Mark companion object members as static
+    });
+
+    // Push to stack and visit body
+    this.nodeStack.push(companionNode.id);
+
+    // Find class_body child
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child?.type === 'class_body') {
+        for (let j = 0; j < child.namedChildCount; j++) {
+          const bodyChild = child.namedChild(j);
+          if (bodyChild) {
+            this.visitNode(bodyChild);
+          }
+        }
+      }
+    }
+
+    this.nodeStack.pop();
+  }
+
+  /**
+   * Extract a Kotlin property (val/var)
+   */
+  private extractKotlinProperty(node: SyntaxNode): void {
+    if (!this.extractor) return;
+
+    // Find the property name (variable_declaration child contains it)
+    let name = '<unknown>';
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child?.type === 'variable_declaration') {
+        // The simple_identifier is inside variable_declaration
+        for (let j = 0; j < child.namedChildCount; j++) {
+          const varChild = child.namedChild(j);
+          if (varChild?.type === 'simple_identifier') {
+            name = getNodeText(varChild, this.source);
+            break;
+          }
+        }
+        break;
+      }
+    }
+
+    // Check if it's a const (compile-time constant)
+    const isConst = kotlinHasModifier(node, 'const');
+
+    const docstring = getPrecedingDocstring(node, this.source);
+    const visibility = this.extractor.getVisibility?.(node);
+
+    // Use 'property' for class properties, 'constant' for const val
+    const kind: NodeKind = isConst ? 'constant' : 'property';
+
+    this.createNode(kind, name, node, {
+      docstring,
+      visibility,
+    });
+  }
+
+  /**
+   * Extract a Kotlin type alias
+   */
+  private extractKotlinTypeAlias(node: SyntaxNode): void {
+    if (!this.extractor) return;
+
+    // Find the type_identifier for the alias name
+    let name = '<unknown>';
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child?.type === 'type_identifier') {
+        name = getNodeText(child, this.source);
+        break;
+      }
+    }
+
+    const docstring = getPrecedingDocstring(node, this.source);
+    const visibility = this.extractor.getVisibility?.(node);
+
+    this.createNode('type_alias', name, node, {
+      docstring,
+      visibility,
+    });
+  }
+
+  /**
+   * Extract Kotlin inheritance (delegation specifiers after ":")
+   */
+  private extractKotlinInheritance(node: SyntaxNode, classId: string): void {
+    // Delegation specifiers are direct children of class_declaration
+    let isFirst = true;
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child?.type === 'delegation_specifier') {
+        // Extract the type name from the specifier
+        // It could be a constructor_invocation (e.g., ParentClass()) or user_type (e.g., Interface)
+        for (let k = 0; k < child.namedChildCount; k++) {
+          const specChild = child.namedChild(k);
+          if (specChild?.type === 'constructor_invocation') {
+            // Get the user_type inside constructor_invocation
+            for (let m = 0; m < specChild.namedChildCount; m++) {
+              const ciChild = specChild.namedChild(m);
+              if (ciChild?.type === 'user_type') {
+                const typeName = getNodeText(ciChild, this.source);
+                // First delegation specifier with constructor call is usually extends
+                this.unresolvedReferences.push({
+                  fromNodeId: classId,
+                  referenceName: typeName,
+                  referenceKind: isFirst ? 'extends' : 'implements',
+                  line: specChild.startPosition.row + 1,
+                  column: specChild.startPosition.column,
+                });
+                isFirst = false;
+                break;
+              }
+            }
+          } else if (specChild?.type === 'user_type') {
+            // Simple type reference (likely an interface)
+            const typeName = getNodeText(specChild, this.source);
+            this.unresolvedReferences.push({
+              fromNodeId: classId,
+              referenceName: typeName,
+              referenceKind: 'implements',
+              line: specChild.startPosition.row + 1,
+              column: specChild.startPosition.column,
+            });
+            isFirst = false;
           }
         }
       }
