@@ -8,7 +8,7 @@
 import { execSync } from 'child_process';
 import { showBanner, showNextSteps, success, error, info, chalk } from './banner';
 import { promptAIAssistant, promptInstallLocation, promptAutoAllow, InstallLocation, AIAssistant } from './prompts';
-import { writeMcpConfig, writePermissions, writeClaudeMd, hasMcpConfig, hasPermissions } from './config-writer';
+import { writeMcpConfig, writePermissions, writeClaudeMd, writeCopilotInstructions, hasMcpConfig, hasPermissions } from './config-writer';
 import CodeGraph from '../index';
 
 /**
@@ -98,7 +98,20 @@ export async function runInstaller(): Promise<void> {
       }
     }
 
-    // Step 4: Initialize the project (for local install or Copilot)
+    // Step 4: Write Copilot instructions (for Copilot or Both)
+    if (assistant === 'copilot' || assistant === 'both') {
+      const copilotResult = writeCopilotInstructions();
+
+      if (copilotResult.created) {
+        success('Created .github/copilot-instructions.md with CodeGraph instructions');
+      } else if (copilotResult.updated) {
+        success('Updated CodeGraph section in .github/copilot-instructions.md');
+      } else {
+        success('Added CodeGraph instructions to .github/copilot-instructions.md');
+      }
+    }
+
+    // Step 5: Initialize the project (for local install or Copilot)
     if (location === 'local' || assistant === 'copilot') {
       await initializeLocalProject();
     }

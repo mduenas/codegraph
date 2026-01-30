@@ -9,6 +9,7 @@ import * as os from 'os';
 import { InstallLocation } from './prompts';
 import {
   CLAUDE_MD_TEMPLATE,
+  COPILOT_INSTRUCTIONS_TEMPLATE,
   CODEGRAPH_SECTION_START,
   CODEGRAPH_SECTION_END,
 } from './claude-md-template';
@@ -270,5 +271,97 @@ export function writeClaudeMd(location: InstallLocation): { created: boolean; up
   // No existing section, append to end
   content = content.trimEnd() + '\n\n' + CLAUDE_MD_TEMPLATE + '\n';
   fs.writeFileSync(claudeMdPath, content);
+  return { created: false, updated: false };
+}
+
+/**
+ * Get the path to .github/copilot-instructions.md
+ */
+function getCopilotInstructionsPath(): string {
+  return path.join(process.cwd(), '.github', 'copilot-instructions.md');
+}
+
+/**
+ * Check if copilot-instructions.md has CodeGraph section
+ */
+export function hasCopilotInstructions(): boolean {
+  const instructionsPath = getCopilotInstructionsPath();
+  try {
+    if (fs.existsSync(instructionsPath)) {
+      const content = fs.readFileSync(instructionsPath, 'utf-8');
+      return content.includes(CODEGRAPH_SECTION_START) || content.includes('## CodeGraph');
+    }
+  } catch {
+    // Ignore errors
+  }
+  return false;
+}
+
+/**
+ * Write or update .github/copilot-instructions.md with CodeGraph instructions
+ */
+export function writeCopilotInstructions(): { created: boolean; updated: boolean } {
+  const instructionsPath = getCopilotInstructionsPath();
+  const githubDir = path.join(process.cwd(), '.github');
+
+  // Ensure .github directory exists
+  if (!fs.existsSync(githubDir)) {
+    fs.mkdirSync(githubDir, { recursive: true });
+  }
+
+  // Check if file exists
+  if (!fs.existsSync(instructionsPath)) {
+    // Create new file with just the CodeGraph section
+    fs.writeFileSync(instructionsPath, COPILOT_INSTRUCTIONS_TEMPLATE + '\n');
+    return { created: true, updated: false };
+  }
+
+  // Read existing content
+  let content = fs.readFileSync(instructionsPath, 'utf-8');
+
+  // Check for marked section (from previous installer)
+  if (content.includes(CODEGRAPH_SECTION_START)) {
+    // Replace the marked section
+    const startIdx = content.indexOf(CODEGRAPH_SECTION_START);
+    const endIdx = content.indexOf(CODEGRAPH_SECTION_END);
+
+    if (endIdx > startIdx) {
+      // Replace existing marked section
+      const before = content.substring(0, startIdx);
+      const after = content.substring(endIdx + CODEGRAPH_SECTION_END.length);
+      content = before + COPILOT_INSTRUCTIONS_TEMPLATE + after;
+      fs.writeFileSync(instructionsPath, content);
+      return { created: false, updated: true };
+    }
+  }
+
+  // Check for unmarked "## CodeGraph" section
+  const codegraphHeaderRegex = /\n## CodeGraph\n/;
+  const match = content.match(codegraphHeaderRegex);
+
+  if (match && match.index !== undefined) {
+    // Find the end of the CodeGraph section (next ## header or end of file)
+    const sectionStart = match.index;
+    const afterSection = content.substring(sectionStart + 1);
+    const nextHeaderMatch = afterSection.match(/\n## [^#]/);
+
+    let sectionEnd: number;
+    if (nextHeaderMatch && nextHeaderMatch.index !== undefined) {
+      sectionEnd = sectionStart + 1 + nextHeaderMatch.index;
+    } else {
+      sectionEnd = content.length;
+    }
+
+    // Replace the section
+    const before = content.substring(0, sectionStart);
+    const after = content.substring(sectionEnd);
+    content = before + '\n' + COPILOT_INSTRUCTIONS_TEMPLATE + after;
+    fs.writeFileSync(instructionsPath, content);
+    return { created: false, updated: true };
+  }
+
+  // No existing section, append to end
+  content = content.trimEnd() + '\n\n' + COPILOT_INSTRUCTIONS_TEMPLATE + '\n';
+  fs.writeFileSync(instructionsPath, content);
   return { created: false, updated: false };
 }
