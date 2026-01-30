@@ -111,6 +111,9 @@ export interface IndexOptions {
 
   /** Abort signal for cancellation */
   signal?: AbortSignal;
+
+  /** Skip reference resolution phase (faster but no call/import edges) */
+  skipResolve?: boolean;
 }
 
 /**
@@ -370,13 +373,14 @@ export class CodeGraph {
       const result = await this.orchestrator.indexAll(options.onProgress, options.signal);
 
       // Resolve references to create call/import/extends edges
-      if (result.success && result.filesIndexed > 0) {
-        options.onProgress?.({
-          phase: 'resolving',
-          current: 0,
-          total: 1,
+      if (result.success && result.filesIndexed > 0 && !options.skipResolve) {
+        this.resolveReferences((current, total) => {
+          options.onProgress?.({
+            phase: 'resolving',
+            current,
+            total,
+          });
         });
-        this.resolveReferences();
       }
 
       return result;
@@ -446,10 +450,10 @@ export class CodeGraph {
    * - Import-based resolution
    * - Name-based symbol matching
    */
-  resolveReferences(): ResolutionResult {
+  resolveReferences(onProgress?: (current: number, total: number) => void): ResolutionResult {
     // Get all unresolved references from the database
     const unresolvedRefs = this.queries.getUnresolvedReferences();
-    return this.resolver.resolveAndPersist(unresolvedRefs);
+    return this.resolver.resolveAndPersist(unresolvedRefs, onProgress);
   }
 
   /**

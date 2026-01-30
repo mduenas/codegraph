@@ -251,7 +251,8 @@ program
   .description('Index all files in the project')
   .option('-f, --force', 'Force full re-index even if already indexed')
   .option('-q, --quiet', 'Suppress progress output')
-  .action(async (pathArg: string | undefined, options: { force?: boolean; quiet?: boolean }) => {
+  .option('--skip-resolve', 'Skip reference resolution (faster but no call edges)')
+  .action(async (pathArg: string | undefined, options: { force?: boolean; quiet?: boolean; skipResolve?: boolean }) => {
     const projectPath = resolveProjectPath(pathArg);
 
     try {
@@ -277,6 +278,7 @@ program
 
       const result = await cg.indexAll({
         onProgress: options.quiet ? undefined : printProgress,
+        skipResolve: options.skipResolve,
       });
 
       // Clear progress line

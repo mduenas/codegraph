@@ -124,23 +124,49 @@ export class ReferenceResolver {
   /**
    * Resolve all unresolved references
    */
-  resolveAll(unresolvedRefs: UnresolvedReference[]): ResolutionResult {
+  resolveAll(
+    unresolvedRefs: UnresolvedReference[],
+    onProgress?: (current: number, total: number) => void
+  ): ResolutionResult {
     const resolved: ResolvedRef[] = [];
     const unresolved: UnresolvedRef[] = [];
     const byMethod: Record<string, number> = {};
 
-    // Convert to our internal format
-    const refs: UnresolvedRef[] = unresolvedRefs.map((ref) => ({
-      fromNodeId: ref.fromNodeId,
-      referenceName: ref.referenceName,
-      referenceKind: ref.referenceKind,
-      line: ref.line,
-      column: ref.column,
-      filePath: this.getFilePathFromNodeId(ref.fromNodeId),
-      language: this.getLanguageFromNodeId(ref.fromNodeId),
-    }));
+    // Batch fetch node info for all references upfront
+    const nodeIds = [...new Set(unresolvedRefs.map((ref) => ref.fromNodeId))];
+    const nodeInfoMap = new Map<string, { filePath: string; language: UnresolvedRef['language'] }>();
 
-    for (const ref of refs) {
+    // Batch query - get all nodes at once
+    for (const nodeId of nodeIds) {
+      const node = this.queries.getNodeById(nodeId);
+      if (node) {
+        nodeInfoMap.set(nodeId, { filePath: node.filePath, language: node.language });
+      }
+    }
+
+    // Convert to our internal format using cached info
+    const refs: UnresolvedRef[] = unresolvedRefs.map((ref) => {
+      const info = nodeInfoMap.get(ref.fromNodeId);
+      return {
+        fromNodeId: ref.fromNodeId,
+        referenceName: ref.referenceName,
+        referenceKind: ref.referenceKind,
+        line: ref.line,
+        column: ref.column,
+        filePath: info?.filePath || '',
+        language: info?.language || 'unknown',
+      };
+    });
+
+    const total = refs.length;
+    for (let i = 0; i < refs.length; i++) {
+      const ref = refs[i]!;
+
+      // Report progress every 100 refs or at milestones
+      if (onProgress && (i % 100 === 0 || i === total - 1)) {
+        onProgress(i + 1, total);
+      }
+
       const result = this.resolveOne(ref);
 
       if (result) {
@@ -215,8 +241,11 @@ export class ReferenceResolver {
   /**
    * Resolve and persist edges to database
    */
-  resolveAndPersist(unresolvedRefs: UnresolvedReference[]): ResolutionResult {
-    const result = this.resolveAll(unresolvedRefs);
+  resolveAndPersist(
+    unresolvedRefs: UnresolvedReference[],
+    onProgress?: (current: number, total: number) => void
+  ): ResolutionResult {
+    const result = this.resolveAll(unresolvedRefs, onProgress);
 
     // Create edges from resolved references
     const edges = this.createEdges(result.resolved);
@@ -278,22 +307,6 @@ export class ReferenceResolver {
     }
 
     return false;
-  }
-
-  /**
-   * Get file path from node ID
-   */
-  private getFilePathFromNodeId(nodeId: string): string {
-    const node = this.queries.getNodeById(nodeId);
-    return node?.filePath || '';
-  }
-
-  /**
-   * Get language from node ID
-   */
-  private getLanguageFromNodeId(nodeId: string): UnresolvedRef['language'] {
-    const node = this.queries.getNodeById(nodeId);
-    return node?.language || 'unknown';
   }
 }
 
