@@ -113,17 +113,47 @@ export function warn(message: string): void {
 /**
  * Show the "next steps" section after installation
  */
-export function showNextSteps(location: 'global' | 'local'): void {
-  console.log();
-  console.log(chalk.bold('  Done!') + ' Restart Claude Code to use CodeGraph.');
+export function showNextSteps(location: 'global' | 'local', assistant: 'claude' | 'copilot' | 'both' = 'claude'): void {
   console.log();
 
-  if (location === 'global') {
-    console.log(chalk.dim('  Quick start:'));
-    console.log(chalk.dim('    cd your-project'));
-    console.log(chalk.cyan('    codegraph init -i'));
+  if (assistant === 'claude') {
+    console.log(chalk.bold('  Done!') + ' Restart Claude Code to use CodeGraph.');
+    console.log();
+    if (location === 'global') {
+      console.log(chalk.dim('  Quick start:'));
+      console.log(chalk.dim('    cd your-project'));
+      console.log(chalk.cyan('    codegraph init -i'));
+    } else {
+      console.log(chalk.dim('  CodeGraph is ready to use in this project!'));
+    }
+  } else if (assistant === 'copilot') {
+    console.log(chalk.bold('  Done!') + ' CodeGraph is ready for GitHub Copilot.');
+    console.log();
+    console.log(chalk.dim('  To start the HTTP server:'));
+    console.log(chalk.cyan('    codegraph serve --mcp --http --port 3000'));
+    console.log();
+    console.log(chalk.dim('  Then add to your MCP configuration:'));
+    console.log(chalk.gray('    {'));
+    console.log(chalk.gray('      "mcpServers": {'));
+    console.log(chalk.gray('        "codegraph": {'));
+    console.log(chalk.gray('          "type": "http",'));
+    console.log(chalk.gray('          "url": "http://localhost:3000/mcp"'));
+    console.log(chalk.gray('        }'));
+    console.log(chalk.gray('      }'));
+    console.log(chalk.gray('    }'));
   } else {
-    console.log(chalk.dim('  CodeGraph is ready to use in this project!'));
+    // Both
+    console.log(chalk.bold('  Done!') + ' CodeGraph is configured for both assistants.');
+    console.log();
+    console.log(chalk.dim('  For Claude Code:'));
+    if (location === 'global') {
+      console.log(chalk.dim('    cd your-project && ') + chalk.cyan('codegraph init -i'));
+    }
+    console.log(chalk.dim('    Restart Claude Code - it will auto-connect via stdio'));
+    console.log();
+    console.log(chalk.dim('  For GitHub Copilot:'));
+    console.log(chalk.cyan('    codegraph serve --mcp --http --port 3000'));
+    console.log(chalk.dim('    Then configure MCP with: ') + chalk.gray('http://localhost:3000/mcp'));
   }
   console.log();
 }

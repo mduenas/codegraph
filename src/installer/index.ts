@@ -7,7 +7,7 @@
 
 import { execSync } from 'child_process';
 import { showBanner, showNextSteps, success, error, info, chalk } from './banner';
-import { promptInstallLocation, promptAutoAllow, InstallLocation } from './prompts';
+import { promptAIAssistant, promptInstallLocation, promptAutoAllow, InstallLocation, AIAssistant } from './prompts';
 import { writeMcpConfig, writePermissions, writeClaudeMd, hasMcpConfig, hasPermissions } from './config-writer';
 import CodeGraph from '../index';
 
@@ -47,54 +47,64 @@ export async function runInstaller(): Promise<void> {
       console.log();
     }
 
-    // Step 2: Ask for installation location
-    const location = await promptInstallLocation();
+    // Step 2: Ask which AI assistant they're using
+    const assistant = await promptAIAssistant();
     console.log();
 
-    // Step 3: Write MCP configuration
-    const alreadyHasMcp = hasMcpConfig(location);
-    writeMcpConfig(location);
+    // Track location for next steps (default to local for Copilot-only)
+    let location: InstallLocation = 'local';
 
-    if (alreadyHasMcp) {
-      success(`Updated MCP server in ${location === 'global' ? '~/.claude.json' : './.claude.json'}`);
-    } else {
-      success(`Added MCP server to ${location === 'global' ? '~/.claude.json' : './.claude.json'}`);
-    }
+    // Step 3: Claude Code specific configuration
+    if (assistant === 'claude' || assistant === 'both') {
+      // Ask for installation location
+      location = await promptInstallLocation();
+      console.log();
 
-    // Step 4: Ask about auto-allow permissions
-    const autoAllow = await promptAutoAllow();
-    console.log();
+      // Write MCP configuration
+      const alreadyHasMcp = hasMcpConfig(location);
+      writeMcpConfig(location);
 
-    if (autoAllow) {
-      const alreadyHasPerms = hasPermissions(location);
-      writePermissions(location);
-
-      if (alreadyHasPerms) {
-        success(`Updated permissions in ${location === 'global' ? '~/.claude/settings.json' : './.claude/settings.json'}`);
+      if (alreadyHasMcp) {
+        success(`Updated MCP server in ${location === 'global' ? '~/.claude.json' : './.claude.json'}`);
       } else {
-        success(`Added permissions to ${location === 'global' ? '~/.claude/settings.json' : './.claude/settings.json'}`);
+        success(`Added MCP server to ${location === 'global' ? '~/.claude.json' : './.claude.json'}`);
+      }
+
+      // Ask about auto-allow permissions
+      const autoAllow = await promptAutoAllow();
+      console.log();
+
+      if (autoAllow) {
+        const alreadyHasPerms = hasPermissions(location);
+        writePermissions(location);
+
+        if (alreadyHasPerms) {
+          success(`Updated permissions in ${location === 'global' ? '~/.claude/settings.json' : './.claude/settings.json'}`);
+        } else {
+          success(`Added permissions to ${location === 'global' ? '~/.claude/settings.json' : './.claude/settings.json'}`);
+        }
+      }
+
+      // Write CLAUDE.md instructions
+      const claudeMdResult = writeClaudeMd(location);
+      const claudeMdPath = location === 'global' ? '~/.claude/CLAUDE.md' : './.claude/CLAUDE.md';
+
+      if (claudeMdResult.created) {
+        success(`Created ${claudeMdPath} with CodeGraph instructions`);
+      } else if (claudeMdResult.updated) {
+        success(`Updated CodeGraph section in ${claudeMdPath}`);
+      } else {
+        success(`Added CodeGraph instructions to ${claudeMdPath}`);
       }
     }
 
-    // Step 5: Write CLAUDE.md instructions
-    const claudeMdResult = writeClaudeMd(location);
-    const claudeMdPath = location === 'global' ? '~/.claude/CLAUDE.md' : './.claude/CLAUDE.md';
-
-    if (claudeMdResult.created) {
-      success(`Created ${claudeMdPath} with CodeGraph instructions`);
-    } else if (claudeMdResult.updated) {
-      success(`Updated CodeGraph section in ${claudeMdPath}`);
-    } else {
-      success(`Added CodeGraph instructions to ${claudeMdPath}`);
-    }
-
-    // Step 6: For local install, initialize the project
-    if (location === 'local') {
+    // Step 4: Initialize the project (for local install or Copilot)
+    if (location === 'local' || assistant === 'copilot') {
       await initializeLocalProject();
     }
 
     // Show next steps
-    showNextSteps(location);
+    showNextSteps(location, assistant);
   } catch (err) {
     console.log();
     if (err instanceof Error && err.message.includes('readline was closed')) {
@@ -163,4 +173,4 @@ async function initializeLocalProject(): Promise<void> {
 }
 
 // Export for use in CLI
-export { InstallLocation };
+export { InstallLocation, AIAssistant };

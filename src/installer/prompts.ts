@@ -7,6 +7,7 @@ import * as readline from 'readline';
 import { chalk } from './banner';
 
 export type InstallLocation = 'global' | 'local';
+export type AIAssistant = 'claude' | 'copilot' | 'both';
 
 /**
  * Create a readline interface for prompts
@@ -27,6 +28,32 @@ function prompt(rl: readline.Interface, question: string): Promise<string> {
       resolve(answer.trim());
     });
   });
+}
+
+/**
+ * Prompt for AI assistant selection
+ */
+export async function promptAIAssistant(): Promise<AIAssistant> {
+  const rl = createInterface();
+
+  console.log(chalk.bold('  Which AI assistant will you use?'));
+  console.log();
+  console.log('  1) Claude Code - stdio transport (default)');
+  console.log('  2) GitHub Copilot - HTTP transport');
+  console.log('  3) Both');
+  console.log();
+
+  const answer = await prompt(rl, '  Choice [1]: ');
+  rl.close();
+
+  const choice = answer === '' ? '1' : answer;
+
+  if (choice === '2') {
+    return 'copilot';
+  } else if (choice === '3') {
+    return 'both';
+  }
+  return 'claude';
 }
 
 /**
