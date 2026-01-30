@@ -38,7 +38,7 @@ export async function runInstaller(): Promise<void> {
     if (!codegraphAvailable) {
       console.log(chalk.dim('  Installing codegraph globally...'));
       try {
-        execSync('npm install -g @colbymchenry/codegraph', { stdio: 'pipe' });
+        execSync('npm install -g @mduenas/codegraph', { stdio: 'pipe' });
         success('Installed codegraph command globally');
       } catch {
         // May fail if no permissions, but that's ok - npx still works

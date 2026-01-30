@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Postinstall script - downloads the embedding model to ~/.codegraph/models
- * This runs after `npm install` or `npx @colbymchenry/codegraph`
+ * This runs after `npm install` or `npx @mduenas/codegraph`
  */
 const { existsSync, mkdirSync } = require('fs');
 const { join } = require('path');

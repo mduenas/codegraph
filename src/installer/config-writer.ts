@@ -88,7 +88,7 @@ function getMcpServerConfig(location: InstallLocation): Record<string, any> {
   return {
     type: 'stdio',
     command: 'npx',
-    args: ['@colbymchenry/codegraph', 'serve', '--mcp'],
+    args: ['@mduenas/codegraph', 'serve', '--mcp'],
   };
 }
 

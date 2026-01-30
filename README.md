@@ -6,7 +6,7 @@
 
 **30% fewer tokens • 25% fewer tool calls • 100% local**
 
-[![npm version](https://img.shields.io/npm/v/@colbymchenry/codegraph.svg)](https://www.npmjs.com/package/@colbymchenry/codegraph)
+[![npm version](https://img.shields.io/npm/v/@mduenas/codegraph.svg)](https://www.npmjs.com/package/@mduenas/codegraph)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-18+-green.svg)](https://nodejs.org/)
 
@@ -15,7 +15,7 @@
 ### Get Started
 
 ```bash
-npx @colbymchenry/codegraph
+npx @mduenas/codegraph
 ```
 
 <sub>Interactive installer configures Claude Code automatically</sub>
@@ -154,7 +154,7 @@ Git hooks automatically sync the index on every commit. Your code intelligence i
 ### 1. Run the Installer
 
 ```bash
-npx @colbymchenry/codegraph
+npx @mduenas/codegraph
 ```
 
 The interactive installer will:
@@ -185,7 +185,7 @@ If you prefer manual configuration:
 
 **Install globally:**
 ```bash
-npm install -g @colbymchenry/codegraph
+npm install -g @mduenas/codegraph
 ```
 
 **Add to `~/.claude.json`:**
@@ -293,7 +293,7 @@ Run the interactive installer for Claude Code integration. Configures MCP server
 ```bash
 codegraph                         # Run installer (when no args)
 codegraph install                 # Run installer (explicit)
-npx @colbymchenry/codegraph       # Run via npx (no global install needed)
+npx @mduenas/codegraph       # Run via npx (no global install needed)
 ```
 
 The installer will:
@@ -456,7 +456,7 @@ This hybrid approach gives you **~30% fewer tokens** and **~25% fewer tool calls
 CodeGraph can also be used as a library in your Node.js applications:
 
 ```typescript
-import CodeGraph from '@colbymchenry/codegraph';
+import CodeGraph from '@mduenas/codegraph';
 
 // Initialize a new project
 const cg = await CodeGraph.init('/path/to/project');
@@ -636,6 +636,6 @@ MIT
 
 **Made for the Claude Code community** 🤖
 
-[Report Bug](https://github.com/colbymchenry/codegraph/issues) · [Request Feature](https://github.com/colbymchenry/codegraph/issues)
+[Report Bug](https://github.com/mduenas/codegraph/issues) · [Request Feature](https://github.com/mduenas/codegraph/issues)
 
 </div>
