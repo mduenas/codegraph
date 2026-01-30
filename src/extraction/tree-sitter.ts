@@ -192,6 +192,121 @@ function isKotlinAbstractClass(node: SyntaxNode): boolean {
   return kotlinHasModifier(node, 'abstract');
 }
 
+// =============================================================================
+// Swift-specific Helper Functions
+// =============================================================================
+
+/**
+ * Check if a Swift node has a specific modifier
+ */
+function swiftHasModifier(node: SyntaxNode, modifier: string): boolean {
+  for (let i = 0; i < node.childCount; i++) {
+    const child = node.child(i);
+    if (child?.type === 'modifiers' && child.text.includes(modifier)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Get the declaration kind from a Swift class_declaration
+ * Returns: 'class' | 'struct' | 'actor' | 'extension' | 'enum' | null
+ */
+function getSwiftDeclarationKind(node: SyntaxNode): string | null {
+  for (let i = 0; i < node.childCount; i++) {
+    const child = node.child(i);
+    if (child) {
+      if (child.type === 'class') return 'class';
+      if (child.type === 'struct') return 'struct';
+      if (child.type === 'actor') return 'actor';
+      if (child.type === 'extension') return 'extension';
+      if (child.type === 'enum') return 'enum';
+    }
+  }
+  return null;
+}
+
+
+/**
+ * Extract property wrapper attributes (e.g., @State, @Published)
+ */
+function getSwiftPropertyWrappers(node: SyntaxNode, source: string): string[] {
+  const wrappers: string[] = [];
+  for (let i = 0; i < node.childCount; i++) {
+    const child = node.child(i);
+    if (child?.type === 'attribute') {
+      const text = getNodeText(child, source);
+      wrappers.push(text);
+    }
+  }
+  return wrappers;
+}
+
+/**
+ * Get the name from a Swift class_declaration
+ * For extensions, returns the extended type name
+ */
+function getSwiftClassName(node: SyntaxNode, source: string): string {
+  let name = '<unknown>';
+  let constraints = '';
+
+  for (let i = 0; i < node.namedChildCount; i++) {
+    const child = node.namedChild(i);
+    if (child?.type === 'type_identifier') {
+      name = getNodeText(child, source);
+    }
+    // For extensions, the name is in a user_type
+    if (child?.type === 'user_type') {
+      name = getNodeText(child, source);
+    }
+    // Capture type_constraints for extensions with where clauses
+    if (child?.type === 'type_constraints') {
+      constraints = ' ' + getNodeText(child, source);
+    }
+  }
+
+  return name + constraints;
+}
+
+/**
+ * Get the name from a Swift property_declaration
+ */
+function getSwiftPropertyName(node: SyntaxNode, source: string): string {
+  for (let i = 0; i < node.namedChildCount; i++) {
+    const child = node.namedChild(i);
+    if (child?.type === 'pattern') {
+      // The simple_identifier is inside the pattern
+      for (let j = 0; j < child.namedChildCount; j++) {
+        const patternChild = child.namedChild(j);
+        if (patternChild?.type === 'simple_identifier') {
+          return getNodeText(patternChild, source);
+        }
+      }
+    }
+  }
+  return '<unknown>';
+}
+
+/**
+ * Check if a Swift property is a constant (let vs var)
+ */
+function isSwiftConstant(node: SyntaxNode): boolean {
+  for (let i = 0; i < node.namedChildCount; i++) {
+    const child = node.namedChild(i);
+    if (child?.type === 'value_binding_pattern') {
+      // Check for 'let' child
+      for (let j = 0; j < child.childCount; j++) {
+        const bindingChild = child.child(j);
+        if (bindingChild?.type === 'let') {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 
 /**
  * Language-specific extractors
@@ -626,8 +741,13 @@ const EXTRACTORS: Partial<Record<Language, LanguageExtractor>> = {
       return false;
     },
     isAsync: (node) => {
+      // In Swift, async is a direct child node, not inside modifiers
       for (let i = 0; i < node.childCount; i++) {
         const child = node.child(i);
+        if (child?.type === 'async') {
+          return true;
+        }
+        // Also check modifiers for cases where it might be there
         if (child?.type === 'modifiers' && child.text.includes('async')) {
           return true;
         }
@@ -828,12 +948,9 @@ export class TreeSitterExtractor {
     }
     // Check for class declarations
     else if (this.extractor.classTypes.includes(nodeType)) {
-      // Swift uses class_declaration for both classes and structs
-      // Check for 'struct' child to differentiate
-      if (this.language === 'swift' && this.hasChildOfType(node, 'struct')) {
-        this.extractStruct(node);
-      } else if (this.language === 'swift' && this.hasChildOfType(node, 'enum')) {
-        this.extractEnum(node);
+      // Swift uses class_declaration for class, struct, actor, extension, enum
+      if (this.language === 'swift' && nodeType === 'class_declaration') {
+        this.extractSwiftClassDeclaration(node);
       }
       // Kotlin uses class_declaration for classes, interfaces, and enums
       else if (this.language === 'kotlin' && nodeType === 'class_declaration') {
@@ -866,6 +983,37 @@ export class TreeSitterExtractor {
     else if (this.language === 'kotlin' && nodeType === 'type_alias') {
       this.extractKotlinTypeAlias(node);
     }
+    // Swift property_declaration (top-level or inside protocols)
+    else if (this.language === 'swift' && nodeType === 'property_declaration') {
+      this.extractSwiftProperty(node);
+    }
+    // Swift protocol_property_declaration
+    else if (this.language === 'swift' && nodeType === 'protocol_property_declaration') {
+      this.extractSwiftProperty(node);
+    }
+    // Swift subscript_declaration
+    else if (this.language === 'swift' && nodeType === 'subscript_declaration') {
+      this.extractSwiftSubscript(node);
+      skipChildren = true;
+    }
+    // Swift typealias_declaration
+    else if (this.language === 'swift' && nodeType === 'typealias_declaration') {
+      this.extractSwiftTypealias(node);
+    }
+    // Swift associatedtype_declaration
+    else if (this.language === 'swift' && nodeType === 'associatedtype_declaration') {
+      this.extractSwiftAssociatedType(node);
+    }
+    // Swift init_declaration
+    else if (this.language === 'swift' && nodeType === 'init_declaration') {
+      this.extractSwiftInit(node);
+      skipChildren = true;
+    }
+    // Swift deinit_declaration
+    else if (this.language === 'swift' && nodeType === 'deinit_declaration') {
+      this.extractSwiftDeinit(node);
+      skipChildren = true;
+    }
     // Check for method declarations (only if not already handled by functionTypes)
     else if (this.extractor.methodTypes.includes(nodeType)) {
       this.extractMethod(node);
@@ -873,7 +1021,12 @@ export class TreeSitterExtractor {
     }
     // Check for interface/protocol/trait declarations
     else if (this.extractor.interfaceTypes.includes(nodeType)) {
-      this.extractInterface(node);
+      // Swift protocols need special handling for associated types
+      if (this.language === 'swift' && nodeType === 'protocol_declaration') {
+        this.extractSwiftProtocol(node);
+      } else {
+        this.extractInterface(node);
+      }
       skipChildren = true; // extractInterface visits body children
     }
     // Check for struct declarations
@@ -963,19 +1116,6 @@ export class TreeSitterExtractor {
     }
     parts.push(name);
     return parts.join('::');
-  }
-
-  /**
-   * Check if a node has a child of a specific type
-   */
-  private hasChildOfType(node: SyntaxNode, type: string): boolean {
-    for (let i = 0; i < node.childCount; i++) {
-      const child = node.child(i);
-      if (child?.type === type) {
-        return true;
-      }
-    }
-    return false;
   }
 
   /**
@@ -1598,6 +1738,528 @@ export class TreeSitterExtractor {
               column: specChild.startPosition.column,
             });
             isFirst = false;
+          }
+        }
+      }
+    }
+  }
+
+  // =============================================================================
+  // Swift-specific Extraction Methods
+  // =============================================================================
+
+  /**
+   * Extract a Swift class declaration (handles class, struct, actor, extension, enum)
+   */
+  private extractSwiftClassDeclaration(node: SyntaxNode): void {
+    const declKind = getSwiftDeclarationKind(node);
+    switch (declKind) {
+      case 'extension':
+        this.extractSwiftExtension(node);
+        break;
+      case 'actor':
+        this.extractSwiftActor(node);
+        break;
+      case 'enum':
+        this.extractSwiftEnum(node);
+        break;
+      case 'struct':
+        this.extractSwiftStruct(node);
+        break;
+      default:
+        this.extractSwiftClass(node);
+    }
+  }
+
+  /**
+   * Extract a Swift class
+   */
+  private extractSwiftClass(node: SyntaxNode): void {
+    if (!this.extractor) return;
+
+    const name = getSwiftClassName(node, this.source);
+    const docstring = getPrecedingDocstring(node, this.source);
+    const visibility = this.extractor.getVisibility?.(node);
+    const isAbstract = swiftHasModifier(node, 'abstract');
+
+    const classNode = this.createNode('class', name, node, {
+      docstring,
+      visibility,
+      isAbstract,
+    });
+
+    // Extract inheritance
+    this.extractSwiftInheritance(node, classNode.id);
+
+    // Push to stack and visit body
+    this.nodeStack.push(classNode.id);
+    this.visitSwiftClassBody(node);
+    this.nodeStack.pop();
+  }
+
+  /**
+   * Extract a Swift struct
+   */
+  private extractSwiftStruct(node: SyntaxNode): void {
+    if (!this.extractor) return;
+
+    const name = getSwiftClassName(node, this.source);
+    const docstring = getPrecedingDocstring(node, this.source);
+    const visibility = this.extractor.getVisibility?.(node);
+
+    const structNode = this.createNode('struct', name, node, {
+      docstring,
+      visibility,
+    });
+
+    // Extract protocol conformance
+    this.extractSwiftInheritance(node, structNode.id);
+
+    // Push to stack and visit body
+    this.nodeStack.push(structNode.id);
+    this.visitSwiftClassBody(node);
+    this.nodeStack.pop();
+  }
+
+  /**
+   * Extract a Swift actor declaration
+   */
+  private extractSwiftActor(node: SyntaxNode): void {
+    if (!this.extractor) return;
+
+    const name = getSwiftClassName(node, this.source);
+    const docstring = getPrecedingDocstring(node, this.source);
+    const visibility = this.extractor.getVisibility?.(node);
+
+    // Actors are similar to classes but with built-in synchronization
+    const actorNode = this.createNode('class', name, node, {
+      docstring,
+      visibility,
+    });
+
+    // Extract protocol conformance
+    this.extractSwiftInheritance(node, actorNode.id);
+
+    // Push to stack and visit body
+    this.nodeStack.push(actorNode.id);
+    this.visitSwiftClassBody(node);
+    this.nodeStack.pop();
+  }
+
+  /**
+   * Extract a Swift extension declaration
+   */
+  private extractSwiftExtension(node: SyntaxNode): void {
+    if (!this.extractor) return;
+
+    // For extensions, the name is the extended type
+    const name = getSwiftClassName(node, this.source);
+    const docstring = getPrecedingDocstring(node, this.source);
+    const visibility = this.extractor.getVisibility?.(node);
+
+    // Extensions are treated as classes extending the original type
+    const extNode = this.createNode('class', name, node, {
+      docstring,
+      visibility,
+    });
+
+    // Extract protocol conformance added by the extension
+    this.extractSwiftInheritance(node, extNode.id);
+
+    // Push to stack and visit body
+    this.nodeStack.push(extNode.id);
+    this.visitSwiftClassBody(node);
+    this.nodeStack.pop();
+  }
+
+  /**
+   * Extract a Swift enum
+   */
+  private extractSwiftEnum(node: SyntaxNode): void {
+    if (!this.extractor) return;
+
+    const name = getSwiftClassName(node, this.source);
+    const docstring = getPrecedingDocstring(node, this.source);
+    const visibility = this.extractor.getVisibility?.(node);
+
+    const enumNode = this.createNode('enum', name, node, {
+      docstring,
+      visibility,
+    });
+
+    // Extract protocol conformance
+    this.extractSwiftInheritance(node, enumNode.id);
+
+    // Push to stack and visit body (enum_class_body)
+    this.nodeStack.push(enumNode.id);
+
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child?.type === 'enum_class_body') {
+        for (let j = 0; j < child.namedChildCount; j++) {
+          const bodyChild = child.namedChild(j);
+          if (bodyChild) {
+            if (bodyChild.type === 'enum_entry') {
+              this.extractSwiftEnumCase(bodyChild);
+            } else {
+              this.visitNode(bodyChild);
+            }
+          }
+        }
+      }
+    }
+
+    this.nodeStack.pop();
+  }
+
+  /**
+   * Extract a Swift enum case
+   */
+  private extractSwiftEnumCase(node: SyntaxNode): void {
+    // Find the simple_identifier for the case name
+    let name = '<unknown>';
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child?.type === 'simple_identifier') {
+        name = getNodeText(child, this.source);
+        break;
+      }
+    }
+
+    this.createNode('enum_member', name, node, {});
+  }
+
+  /**
+   * Extract a Swift property (stored or computed)
+   */
+  private extractSwiftProperty(node: SyntaxNode): void {
+    if (!this.extractor) return;
+
+    const name = getSwiftPropertyName(node, this.source);
+    const docstring = getPrecedingDocstring(node, this.source);
+    const visibility = this.extractor.getVisibility?.(node);
+    const isConst = isSwiftConstant(node);
+    const isStatic = this.extractor.isStatic?.(node);
+
+    // Get property wrappers (decorators)
+    const wrappers = getSwiftPropertyWrappers(node, this.source);
+    const decorators = wrappers.length > 0 ? wrappers : undefined;
+
+    // Use 'constant' for let, 'property' for var
+    const kind: NodeKind = isConst && this.nodeStack.length === 0 ? 'constant' : 'property';
+
+    this.createNode(kind, name, node, {
+      docstring,
+      visibility,
+      isStatic,
+      decorators,
+    });
+  }
+
+  /**
+   * Extract a Swift subscript declaration
+   */
+  private extractSwiftSubscript(node: SyntaxNode): void {
+    if (!this.extractor) return;
+
+    // Subscripts are treated as methods
+    const docstring = getPrecedingDocstring(node, this.source);
+    const visibility = this.extractor.getVisibility?.(node);
+    const isStatic = this.extractor.isStatic?.(node);
+
+    // Build signature from parameters and return type
+    let signature = '';
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child?.type === 'parameter') {
+        if (signature) signature += ', ';
+        signature += getNodeText(child, this.source);
+      } else if (child?.type === 'user_type') {
+        signature += ' -> ' + getNodeText(child, this.source);
+      }
+    }
+
+    this.createNode('method', 'subscript', node, {
+      docstring,
+      visibility,
+      isStatic,
+      signature: signature || undefined,
+    });
+  }
+
+  /**
+   * Extract a Swift typealias declaration
+   */
+  private extractSwiftTypealias(node: SyntaxNode): void {
+    // Find the type_identifier for the alias name
+    let name = '<unknown>';
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child?.type === 'type_identifier') {
+        name = getNodeText(child, this.source);
+        break;
+      }
+    }
+
+    const docstring = getPrecedingDocstring(node, this.source);
+    const visibility = this.extractor?.getVisibility?.(node);
+
+    this.createNode('type_alias', name, node, {
+      docstring,
+      visibility,
+    });
+  }
+
+  /**
+   * Extract a Swift associated type declaration (in protocols)
+   */
+  private extractSwiftAssociatedType(node: SyntaxNode): void {
+    // Find the type_identifier for the associated type name
+    let name = '<unknown>';
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child?.type === 'type_identifier') {
+        name = getNodeText(child, this.source);
+        break;
+      }
+    }
+
+    const docstring = getPrecedingDocstring(node, this.source);
+
+    this.createNode('type_alias', name, node, {
+      docstring,
+    });
+  }
+
+  /**
+   * Extract a Swift init declaration
+   */
+  private extractSwiftInit(node: SyntaxNode): void {
+    if (!this.extractor) return;
+
+    const docstring = getPrecedingDocstring(node, this.source);
+    const visibility = this.extractor.getVisibility?.(node);
+    const isAsync = this.extractor.isAsync?.(node);
+
+    // Build signature from parameters
+    let signature = '';
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child?.type === 'parameter') {
+        if (signature) signature += ', ';
+        signature += getNodeText(child, this.source);
+      }
+    }
+
+    const initNode = this.createNode('method', 'init', node, {
+      docstring,
+      visibility,
+      isAsync,
+      signature: signature ? `(${signature})` : '()',
+    });
+
+    // Visit function body for calls
+    this.nodeStack.push(initNode.id);
+    this.visitSwiftFunctionBody(node);
+    this.nodeStack.pop();
+  }
+
+  /**
+   * Extract a Swift deinit declaration
+   */
+  private extractSwiftDeinit(node: SyntaxNode): void {
+    const docstring = getPrecedingDocstring(node, this.source);
+
+    const deinitNode = this.createNode('method', 'deinit', node, {
+      docstring,
+    });
+
+    // Visit function body for calls
+    this.nodeStack.push(deinitNode.id);
+    this.visitSwiftFunctionBody(node);
+    this.nodeStack.pop();
+  }
+
+  /**
+   * Extract Swift inheritance (protocol conformance, superclass)
+   */
+  private extractSwiftInheritance(node: SyntaxNode, classId: string): void {
+    let isFirst = true;
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child?.type === 'inheritance_specifier') {
+        // Get the user_type inside inheritance_specifier
+        for (let j = 0; j < child.namedChildCount; j++) {
+          const specChild = child.namedChild(j);
+          if (specChild?.type === 'user_type') {
+            const typeName = getNodeText(specChild, this.source);
+            // First inheritance is usually extends (for classes), rest are implements
+            this.unresolvedReferences.push({
+              fromNodeId: classId,
+              referenceName: typeName,
+              referenceKind: isFirst ? 'extends' : 'implements',
+              line: specChild.startPosition.row + 1,
+              column: specChild.startPosition.column,
+            });
+            isFirst = false;
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Extract a Swift protocol declaration
+   */
+  private extractSwiftProtocol(node: SyntaxNode): void {
+    if (!this.extractor) return;
+
+    // Get protocol name
+    let name = '<unknown>';
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child?.type === 'type_identifier') {
+        name = getNodeText(child, this.source);
+        break;
+      }
+    }
+
+    const docstring = getPrecedingDocstring(node, this.source);
+    const visibility = this.extractor.getVisibility?.(node);
+
+    const protocolNode = this.createNode('interface', name, node, {
+      docstring,
+      visibility,
+    });
+
+    // Extract protocol inheritance
+    this.extractSwiftInheritance(node, protocolNode.id);
+
+    // Push to stack and visit protocol body
+    this.nodeStack.push(protocolNode.id);
+
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child?.type === 'protocol_body') {
+        for (let j = 0; j < child.namedChildCount; j++) {
+          const bodyChild = child.namedChild(j);
+          if (bodyChild) {
+            if (bodyChild.type === 'associatedtype_declaration') {
+              this.extractSwiftAssociatedType(bodyChild);
+            } else if (bodyChild.type === 'protocol_property_declaration') {
+              this.extractSwiftProtocolProperty(bodyChild);
+            } else if (bodyChild.type === 'protocol_function_declaration') {
+              this.extractSwiftProtocolFunction(bodyChild);
+            } else {
+              this.visitNode(bodyChild);
+            }
+          }
+        }
+      }
+    }
+
+    this.nodeStack.pop();
+  }
+
+  /**
+   * Extract a Swift protocol property declaration
+   */
+  private extractSwiftProtocolProperty(node: SyntaxNode): void {
+    // Find the simple_identifier for the property name
+    let name = '<unknown>';
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child?.type === 'pattern') {
+        for (let j = 0; j < child.namedChildCount; j++) {
+          const patternChild = child.namedChild(j);
+          if (patternChild?.type === 'simple_identifier') {
+            name = getNodeText(patternChild, this.source);
+            break;
+          }
+        }
+      }
+    }
+
+    const docstring = getPrecedingDocstring(node, this.source);
+
+    this.createNode('property', name, node, {
+      docstring,
+    });
+  }
+
+  /**
+   * Extract a Swift protocol function declaration
+   */
+  private extractSwiftProtocolFunction(node: SyntaxNode): void {
+    // Find the simple_identifier for the function name
+    let name = '<unknown>';
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child?.type === 'simple_identifier') {
+        name = getNodeText(child, this.source);
+        break;
+      }
+    }
+
+    const docstring = getPrecedingDocstring(node, this.source);
+
+    // Build signature
+    let signature = '';
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child?.type === 'user_type') {
+        signature = ' -> ' + getNodeText(child, this.source);
+        break;
+      }
+    }
+
+    this.createNode('method', name, node, {
+      docstring,
+      signature: signature || undefined,
+    });
+  }
+
+  /**
+   * Visit a Swift class/struct/actor body and extract members
+   */
+  private visitSwiftClassBody(node: SyntaxNode): void {
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child?.type === 'class_body') {
+        for (let j = 0; j < child.namedChildCount; j++) {
+          const bodyChild = child.namedChild(j);
+          if (bodyChild) {
+            // Handle Swift-specific node types
+            if (bodyChild.type === 'property_declaration') {
+              this.extractSwiftProperty(bodyChild);
+            } else if (bodyChild.type === 'subscript_declaration') {
+              this.extractSwiftSubscript(bodyChild);
+            } else if (bodyChild.type === 'init_declaration') {
+              this.extractSwiftInit(bodyChild);
+            } else if (bodyChild.type === 'deinit_declaration') {
+              this.extractSwiftDeinit(bodyChild);
+            } else if (bodyChild.type === 'typealias_declaration') {
+              this.extractSwiftTypealias(bodyChild);
+            } else {
+              this.visitNode(bodyChild);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Visit a Swift function body to extract calls
+   */
+  private visitSwiftFunctionBody(node: SyntaxNode): void {
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child?.type === 'function_body') {
+        for (let j = 0; j < child.namedChildCount; j++) {
+          const bodyChild = child.namedChild(j);
+          if (bodyChild) {
+            this.visitNode(bodyChild);
           }
         }
       }

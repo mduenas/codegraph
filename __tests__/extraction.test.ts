@@ -479,6 +479,344 @@ public protocol Repository {
     expect(protocolNode).toBeDefined();
     expect(protocolNode?.name).toBe('Repository');
   });
+
+  it('should extract extension declarations', () => {
+    const code = `
+extension String {
+    func toSlug() -> String {
+        return self.lowercased().replacingOccurrences(of: " ", with: "-")
+    }
+
+    var isBlank: Bool {
+        return self.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+}
+
+extension Array where Element: Equatable {
+    func containsDuplicates() -> Bool {
+        return self.count != Set(self).count
+    }
+}
+`;
+    const result = extractFromSource('StringExtensions.swift', code);
+
+    // Extensions are extracted as classes with the extended type name
+    const stringExt = result.nodes.find((n) => n.kind === 'class' && n.name === 'String');
+    expect(stringExt).toBeDefined();
+
+    const arrayExt = result.nodes.find((n) => n.kind === 'class' && n.name === 'Array where Element: Equatable');
+    expect(arrayExt).toBeDefined();
+  });
+
+  it('should extract actor declarations', () => {
+    const code = `
+actor BankAccount {
+    private var balance: Double = 0
+
+    func deposit(amount: Double) {
+        balance += amount
+    }
+
+    func withdraw(amount: Double) -> Bool {
+        guard balance >= amount else { return false }
+        balance -= amount
+        return true
+    }
+
+    func getBalance() -> Double {
+        return balance
+    }
+}
+`;
+    const result = extractFromSource('BankAccount.swift', code);
+
+    const actorNode = result.nodes.find((n) => n.kind === 'class' && n.name === 'BankAccount');
+    expect(actorNode).toBeDefined();
+
+    // Check methods are extracted
+    const methods = result.nodes.filter((n) => n.kind === 'method');
+    expect(methods.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('should extract properties (stored and computed)', () => {
+    const code = `
+struct Rectangle {
+    var width: Double
+    var height: Double
+
+    var area: Double {
+        return width * height
+    }
+
+    var perimeter: Double {
+        get { return 2 * (width + height) }
+    }
+}
+`;
+    const result = extractFromSource('Rectangle.swift', code);
+
+    const structNode = result.nodes.find((n) => n.kind === 'struct');
+    expect(structNode).toBeDefined();
+    expect(structNode?.name).toBe('Rectangle');
+
+    // Properties should be extracted
+    const properties = result.nodes.filter((n) => n.kind === 'property');
+    expect(properties.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('should extract subscript declarations', () => {
+    const code = `
+struct Matrix {
+    var data: [[Int]]
+
+    subscript(row: Int, column: Int) -> Int {
+        get { return data[row][column] }
+        set { data[row][column] = newValue }
+    }
+}
+`;
+    const result = extractFromSource('Matrix.swift', code);
+
+    const structNode = result.nodes.find((n) => n.kind === 'struct');
+    expect(structNode).toBeDefined();
+
+    // Subscript should be extracted as a method
+    const subscript = result.nodes.find((n) => n.kind === 'method' && n.name === 'subscript');
+    expect(subscript).toBeDefined();
+  });
+
+  it('should extract associated types in protocols', () => {
+    const code = `
+protocol Container {
+    associatedtype Item
+    associatedtype Index: Hashable
+
+    func item(at index: Index) -> Item
+    mutating func append(_ item: Item)
+}
+`;
+    const result = extractFromSource('Container.swift', code);
+
+    const protocolNode = result.nodes.find((n) => n.kind === 'interface');
+    expect(protocolNode).toBeDefined();
+    expect(protocolNode?.name).toBe('Container');
+
+    // Associated types should be extracted as type_alias
+    const typeAliases = result.nodes.filter((n) => n.kind === 'type_alias');
+    expect(typeAliases.length).toBeGreaterThanOrEqual(2);
+    expect(typeAliases.some((t) => t.name === 'Item')).toBe(true);
+    expect(typeAliases.some((t) => t.name === 'Index')).toBe(true);
+  });
+
+  it('should extract typealias declarations', () => {
+    const code = `
+typealias StringDictionary = [String: Any]
+typealias Completion<T> = (Result<T, Error>) -> Void
+typealias Handler = () -> Void
+`;
+    const result = extractFromSource('TypeAliases.swift', code);
+
+    const typeAliases = result.nodes.filter((n) => n.kind === 'type_alias');
+    expect(typeAliases.length).toBeGreaterThanOrEqual(3);
+    expect(typeAliases.some((t) => t.name === 'StringDictionary')).toBe(true);
+    expect(typeAliases.some((t) => t.name === 'Completion')).toBe(true);
+    expect(typeAliases.some((t) => t.name === 'Handler')).toBe(true);
+  });
+
+  it('should extract enum cases with associated values', () => {
+    const code = `
+enum NetworkError: Error {
+    case invalidURL
+    case timeout(seconds: Int)
+    case httpError(statusCode: Int, message: String)
+    case unknown(underlying: Error)
+}
+`;
+    const result = extractFromSource('NetworkError.swift', code);
+
+    const enumNode = result.nodes.find((n) => n.kind === 'enum');
+    expect(enumNode).toBeDefined();
+    expect(enumNode?.name).toBe('NetworkError');
+
+    // Enum cases should be extracted as enum_member
+    const members = result.nodes.filter((n) => n.kind === 'enum_member');
+    expect(members.length).toBeGreaterThanOrEqual(4);
+    expect(members.some((m) => m.name === 'invalidURL')).toBe(true);
+    expect(members.some((m) => m.name === 'timeout')).toBe(true);
+    expect(members.some((m) => m.name === 'httpError')).toBe(true);
+  });
+
+  it('should extract enum with raw values', () => {
+    const code = `
+enum HTTPMethod: String {
+    case get = "GET"
+    case post = "POST"
+    case put = "PUT"
+    case delete = "DELETE"
+}
+
+enum Priority: Int {
+    case low = 0
+    case medium = 1
+    case high = 2
+}
+`;
+    const result = extractFromSource('Enums.swift', code);
+
+    const enums = result.nodes.filter((n) => n.kind === 'enum');
+    expect(enums.length).toBe(2);
+    expect(enums.some((e) => e.name === 'HTTPMethod')).toBe(true);
+    expect(enums.some((e) => e.name === 'Priority')).toBe(true);
+
+    const members = result.nodes.filter((n) => n.kind === 'enum_member');
+    expect(members.length).toBeGreaterThanOrEqual(7);
+  });
+
+  it('should extract init declarations', () => {
+    const code = `
+class DatabaseConnection {
+    private var connection: Connection?
+
+    init(url: String) throws {
+        self.connection = try Connection(url: url)
+    }
+
+    convenience init() {
+        try? self.init(url: "default://localhost")
+    }
+
+    deinit {
+        connection?.close()
+    }
+}
+`;
+    const result = extractFromSource('DatabaseConnection.swift', code);
+
+    const classNode = result.nodes.find((n) => n.kind === 'class');
+    expect(classNode).toBeDefined();
+
+    // Init should be extracted as method
+    const inits = result.nodes.filter((n) => n.kind === 'method' && n.name === 'init');
+    expect(inits.length).toBeGreaterThanOrEqual(1);
+
+    // Deinit should be extracted as method
+    const deinit = result.nodes.find((n) => n.kind === 'method' && n.name === 'deinit');
+    expect(deinit).toBeDefined();
+  });
+
+  it('should extract visibility modifiers correctly', () => {
+    const code = `
+public class APIClient {
+    public var baseURL: URL
+    internal let session: URLSession
+    fileprivate var cache: [String: Data] = [:]
+    private var apiKey: String
+
+    public init(baseURL: URL, apiKey: String) {
+        self.baseURL = baseURL
+        self.apiKey = apiKey
+        self.session = URLSession.shared
+    }
+}
+`;
+    const result = extractFromSource('APIClient.swift', code);
+
+    const classNode = result.nodes.find((n) => n.kind === 'class');
+    expect(classNode).toBeDefined();
+    expect(classNode?.visibility).toBe('public');
+  });
+
+  it('should extract async functions', () => {
+    const code = `
+func fetchUser(id: String) async throws -> User {
+    let data = try await network.fetch(endpoint: "/users/\(id)")
+    return try JSONDecoder().decode(User.self, from: data)
+}
+
+func loadData() async {
+    await process()
+}
+`;
+    const result = extractFromSource('AsyncFunctions.swift', code);
+
+    const functions = result.nodes.filter((n) => n.kind === 'function');
+    expect(functions.length).toBeGreaterThanOrEqual(2);
+
+    // Check async flag
+    const asyncFunc = functions.find((f) => f.name === 'fetchUser');
+    expect(asyncFunc).toBeDefined();
+    expect(asyncFunc?.isAsync).toBe(true);
+  });
+
+  it('should extract static and class methods', () => {
+    const code = `
+class Factory {
+    static func create() -> Factory {
+        return Factory()
+    }
+
+    class func classMethod() -> String {
+        return "class method"
+    }
+
+    func instanceMethod() -> String {
+        return "instance method"
+    }
+}
+`;
+    const result = extractFromSource('Factory.swift', code);
+
+    const classNode = result.nodes.find((n) => n.kind === 'class');
+    expect(classNode).toBeDefined();
+
+    const methods = result.nodes.filter((n) => n.kind === 'method');
+    expect(methods.length).toBeGreaterThanOrEqual(2);
+
+    // Check static flag
+    const staticMethod = methods.find((m) => m.name === 'create');
+    expect(staticMethod).toBeDefined();
+    expect(staticMethod?.isStatic).toBe(true);
+  });
+
+  it('should track function calls', () => {
+    const code = `
+func main() {
+    let user = fetchUser(id: "123")
+    processData(user.data)
+    print(user.name)
+}
+`;
+    const result = extractFromSource('Main.swift', code);
+
+    // Unresolved references should include function calls
+    expect(result.unresolvedReferences.length).toBeGreaterThan(0);
+    expect(result.unresolvedReferences.some((r) => r.referenceName === 'fetchUser')).toBe(true);
+  });
+
+  it('should extract protocol methods', () => {
+    const code = `
+protocol Drawable {
+    var size: Double { get }
+    func draw() -> Color
+    func resize(to newSize: Double)
+}
+`;
+    const result = extractFromSource('Drawable.swift', code);
+
+    const protocolNode = result.nodes.find((n) => n.kind === 'interface');
+    expect(protocolNode).toBeDefined();
+    expect(protocolNode?.name).toBe('Drawable');
+
+    // Protocol methods should be extracted
+    const methods = result.nodes.filter((n) => n.kind === 'method');
+    expect(methods.length).toBeGreaterThanOrEqual(2);
+    expect(methods.some((m) => m.name === 'draw')).toBe(true);
+    expect(methods.some((m) => m.name === 'resize')).toBe(true);
+
+    // Protocol property should be extracted
+    const properties = result.nodes.filter((n) => n.kind === 'property');
+    expect(properties.some((p) => p.name === 'size')).toBe(true);
+  });
 });
 
 describe('Kotlin Extraction', () => {

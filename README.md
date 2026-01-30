@@ -596,7 +596,7 @@ The `.codegraph/config.json` file controls indexing behavior:
 | Ruby | `.rb` | Full support |
 | C | `.c`, `.h` | Full support |
 | C++ | `.cpp`, `.hpp`, `.cc` | Full support |
-| Swift | `.swift` | Basic support |
+| Swift | `.swift` | Full support |
 | Kotlin | `.kt`, `.kts` | Full support |
 
 ## 🔧 Troubleshooting
