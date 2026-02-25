@@ -7,6 +7,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import { execFileSync } from 'child_process';
 import {
   Language,
   FileRecord,
@@ -18,7 +19,7 @@ import { QueryBuilder } from '../db/queries';
 import { extractFromSource } from './tree-sitter';
 import { detectLanguage, isLanguageSupported } from './grammars';
 import { logDebug } from '../errors';
-import { validatePathWithinRoot } from '../utils';
+import { validatePathWithinRoot, normalizePath } from '../utils';
 
 /**
  * Progress callback for indexing operations
@@ -66,6 +67,9 @@ export function hashContent(content: string): string {
  * Check if a path matches any glob pattern (simplified)
  */
 function matchesGlob(filePath: string, pattern: string): boolean {
+  // Normalize to forward slashes so Windows backslash paths match glob patterns
+  filePath = normalizePath(filePath);
+
   // Convert glob to regex using placeholders to avoid conflicts
   let regexStr = pattern;
 
@@ -113,6 +117,31 @@ export function shouldIncludeFile(
 }
 
 /**
+ * Get directories ignored by .gitignore using git ls-files.
+ * Returns a Set of normalized relative directory paths (forward slashes, no trailing slash).
+ * Gracefully returns empty Set on any failure.
+ */
+function getGitIgnoredDirectories(rootDir: string): Set<string> {
+  try {
+    const output = execFileSync(
+      'git',
+      ['ls-files', '-oi', '--exclude-standard', '--directory'],
+      { cwd: rootDir, encoding: 'utf-8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'] }
+    );
+    const dirs = new Set<string>();
+    for (const line of output.split('\n')) {
+      const trimmed = line.trim();
+      if (trimmed.endsWith('/')) {
+        dirs.add(normalizePath(trimmed.slice(0, -1)));
+      }
+    }
+    return dirs;
+  } catch {
+    return new Set<string>();
+  }
+}
+
+/**
  * Recursively scan directory for source files
  */
 export function scanDirectory(
@@ -123,6 +152,7 @@ export function scanDirectory(
   const files: string[] = [];
   let count = 0;
   const visitedRealPaths = new Set<string>(); // Symlink cycle detection
+  const gitIgnoredDirs = getGitIgnoredDirectories(rootDir);
 
   function walk(dir: string): void {
     // Symlink cycle detection: resolve real path and skip if already visited
@@ -147,7 +177,7 @@ export function scanDirectory(
 
     for (const entry of entries) {
       const fullPath = path.join(dir, entry.name);
-      const relativePath = path.relative(rootDir, fullPath);
+      const relativePath = normalizePath(path.relative(rootDir, fullPath));
 
       // Follow symlinked directories, but skip symlinked files to non-project targets
       if (entry.isSymbolicLink()) {
@@ -155,6 +185,10 @@ export function scanDirectory(
           const realTarget = fs.realpathSync(fullPath);
           const stat = fs.statSync(realTarget);
           if (stat.isDirectory()) {
+            // Check gitignore first (fast O(1) lookup)
+            if (gitIgnoredDirs.has(relativePath)) {
+              continue;
+            }
             // Check exclusion, then recurse (cycle detection handles the rest)
             const dirPattern = relativePath + '/';
             let excluded = false;
@@ -183,6 +217,10 @@ export function scanDirectory(
       }
 
       if (entry.isDirectory()) {
+        // Check gitignore first (fast O(1) lookup)
+        if (gitIgnoredDirs.has(relativePath)) {
+          continue;
+        }
         // Check if directory should be excluded
         const dirPattern = relativePath + '/';
         let excluded = false;
