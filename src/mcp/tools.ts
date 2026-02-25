@@ -6,6 +6,7 @@
 
 import CodeGraph from '../index';
 import type { Node, SearchResult, Subgraph, TaskContext, NodeKind } from '../types';
+import { clamp } from '../utils';
 
 /**
  * MCP Tool definition
@@ -219,7 +220,7 @@ export class ToolHandler {
   private async handleSearch(args: Record<string, unknown>): Promise<ToolResult> {
     const query = args.query as string;
     const kind = args.kind as string | undefined;
-    const limit = (args.limit as number) || 10;
+    const limit = clamp((args.limit as number) || 10, 1, 100);
 
     const results = this.cg.searchNodes(query, {
       limit,
@@ -296,7 +297,7 @@ export class ToolHandler {
    */
   private async handleCallers(args: Record<string, unknown>): Promise<ToolResult> {
     const symbol = args.symbol as string;
-    const limit = (args.limit as number) || 20;
+    const limit = clamp((args.limit as number) || 20, 1, 100);
 
     // First find the node by name
     const results = this.cg.searchNodes(symbol, { limit: 1 });
@@ -322,7 +323,7 @@ export class ToolHandler {
    */
   private async handleCallees(args: Record<string, unknown>): Promise<ToolResult> {
     const symbol = args.symbol as string;
-    const limit = (args.limit as number) || 20;
+    const limit = clamp((args.limit as number) || 20, 1, 100);
 
     // First find the node by name
     const results = this.cg.searchNodes(symbol, { limit: 1 });
@@ -348,7 +349,7 @@ export class ToolHandler {
    */
   private async handleImpact(args: Record<string, unknown>): Promise<ToolResult> {
     const symbol = args.symbol as string;
-    const depth = (args.depth as number) || 2;
+    const depth = clamp((args.depth as number) || 2, 1, 10);
 
     // First find the node by name
     const results = this.cg.searchNodes(symbol, { limit: 1 });

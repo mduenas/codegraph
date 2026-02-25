@@ -18,6 +18,7 @@ import { QueryBuilder } from '../db/queries';
 import { extractFromSource } from './tree-sitter';
 import { detectLanguage, isLanguageSupported } from './grammars';
 import { logDebug } from '../errors';
+import { validatePathWithinRoot } from '../utils';
 
 /**
  * Progress callback for indexing operations
@@ -121,8 +122,21 @@ export function scanDirectory(
 ): string[] {
   const files: string[] = [];
   let count = 0;
+  const visitedRealPaths = new Set<string>(); // Symlink cycle detection
 
   function walk(dir: string): void {
+    // Symlink cycle detection: resolve real path and skip if already visited
+    try {
+      const realDir = fs.realpathSync(dir);
+      if (visitedRealPaths.has(realDir)) {
+        logDebug('Skipping directory to prevent symlink cycle', { dir, realDir });
+        return;
+      }
+      visitedRealPaths.add(realDir);
+    } catch {
+      // If realpath fails, skip this directory
+      return;
+    }
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -134,6 +148,39 @@ export function scanDirectory(
     for (const entry of entries) {
       const fullPath = path.join(dir, entry.name);
       const relativePath = path.relative(rootDir, fullPath);
+
+      // Follow symlinked directories, but skip symlinked files to non-project targets
+      if (entry.isSymbolicLink()) {
+        try {
+          const realTarget = fs.realpathSync(fullPath);
+          const stat = fs.statSync(realTarget);
+          if (stat.isDirectory()) {
+            // Check exclusion, then recurse (cycle detection handles the rest)
+            const dirPattern = relativePath + '/';
+            let excluded = false;
+            for (const pattern of config.exclude) {
+              if (matchesGlob(dirPattern, pattern) || matchesGlob(relativePath, pattern)) {
+                excluded = true;
+                break;
+              }
+            }
+            if (!excluded) {
+              walk(fullPath);
+            }
+          } else if (stat.isFile()) {
+            if (shouldIncludeFile(relativePath, config)) {
+              files.push(relativePath);
+              count++;
+              if (onProgress) {
+                onProgress(count, relativePath);
+              }
+            }
+          }
+        } catch {
+          logDebug('Skipping broken symlink', { path: fullPath });
+        }
+        continue;
+      }
 
       if (entry.isDirectory()) {
         // Check if directory should be excluded
@@ -321,7 +368,17 @@ export class ExtractionOrchestrator {
    * Index a single file
    */
   async indexFile(relativePath: string): Promise<ExtractionResult> {
-    const fullPath = path.join(this.rootDir, relativePath);
+    const fullPath = validatePathWithinRoot(this.rootDir, relativePath);
+
+    if (!fullPath) {
+      return {
+        nodes: [],
+        edges: [],
+        unresolvedReferences: [],
+        errors: [{ message: `Path traversal blocked: ${relativePath}`, severity: 'error' }],
+        durationMs: 0,
+      };
+    }
 
     // Check file exists and is readable
     let content: string;
