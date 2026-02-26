@@ -1,8 +1,8 @@
 /**
  * Vector Search
  *
- * Provides vector similarity search using sqlite-vss extension.
- * Falls back to brute-force cosine similarity if sqlite-vss is not available.
+ * Provides vector similarity search using sqlite-vec extension.
+ * Falls back to brute-force cosine similarity if sqlite-vec is not available.
  */
 
 import Database from 'better-sqlite3';
@@ -30,7 +30,7 @@ export interface VectorSearchOptions {
  */
 export class VectorSearchManager {
   private db: Database.Database;
-  private vssEnabled = false;
+  private vecEnabled = false;
   private embeddingDimension: number;
 
   constructor(db: Database.Database, dimension: number = EMBEDDING_DIMENSION) {
@@ -41,81 +41,66 @@ export class VectorSearchManager {
   /**
    * Initialize vector search
    *
-   * Attempts to load sqlite-vss extension. Falls back to brute-force
+   * Attempts to load sqlite-vec extension. Falls back to brute-force
    * search if the extension is not available.
    */
   async initialize(): Promise<void> {
     try {
-      // Try to load sqlite-vss extension
-      await this.loadVssExtension();
-      this.vssEnabled = true;
-      console.log('sqlite-vss extension loaded successfully');
+      // Try to load sqlite-vec extension
+      await this.loadVecExtension();
+      this.vecEnabled = true;
+      console.log('sqlite-vec extension loaded successfully');
 
-      // Create the VSS virtual table
-      this.createVssTable();
+      // Create the vec virtual table
+      this.createVecTable();
     } catch (error) {
       // Fall back to brute-force search
       console.warn(
-        'sqlite-vss extension not available, falling back to brute-force search:',
+        'sqlite-vec extension not available, falling back to brute-force search:',
         error instanceof Error ? error.message : String(error)
       );
-      this.vssEnabled = false;
+      this.vecEnabled = false;
     }
 
-    // Ensure the vectors table exists (for both VSS and fallback modes)
+    // Ensure the vectors table exists (for both vec and fallback modes)
     this.ensureVectorsTable();
   }
 
   /**
-   * Load the sqlite-vss extension
+   * Load the sqlite-vec extension
    */
-  private async loadVssExtension(): Promise<void> {
+  private async loadVecExtension(): Promise<void> {
     try {
-      // The sqlite-vss npm package provides functions to load extensions
-      const vss = await import('sqlite-vss');
+      const sqliteVec = await import('sqlite-vec');
 
-      // Use the load function which loads both vector0 and vss0
-      if (typeof vss.load === 'function') {
-        vss.load(this.db);
-      } else if (typeof vss.default?.load === 'function') {
-        vss.default.load(this.db);
+      if (typeof sqliteVec.load === 'function') {
+        sqliteVec.load(this.db);
+      } else if (typeof sqliteVec.default?.load === 'function') {
+        sqliteVec.default.load(this.db);
       } else {
-        throw new Error('sqlite-vss load function not found');
+        throw new Error('sqlite-vec load function not found');
       }
     } catch (error) {
-      throw new Error(`Failed to load sqlite-vss: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`Failed to load sqlite-vec: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
   /**
-   * Create the VSS virtual table for vector search
+   * Create the vec virtual table for vector search
    */
-  private createVssTable(): void {
+  private createVecTable(): void {
     // Check if the table already exists
     const tableExists = this.db
-      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='vss_vectors'")
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='vec_vectors'")
       .get();
 
     if (!tableExists) {
-      // Create VSS virtual table
-      // vss0 is the vector search extension
+      // Create vec0 virtual table with node_id as auxiliary column
       this.db.exec(`
-        CREATE VIRTUAL TABLE IF NOT EXISTS vss_vectors USING vss0(
-          embedding(${this.embeddingDimension})
+        CREATE VIRTUAL TABLE IF NOT EXISTS vec_vectors USING vec0(
+          node_id text,
+          embedding float[${this.embeddingDimension}]
         );
-      `);
-
-      // Create mapping table to link VSS rowids to node IDs
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS vss_map (
-          rowid INTEGER PRIMARY KEY,
-          node_id TEXT NOT NULL UNIQUE
-        );
-      `);
-
-      // Create index on node_id
-      this.db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_vss_map_node ON vss_map(node_id);
       `);
     }
   }
@@ -135,10 +120,10 @@ export class VectorSearchManager {
   }
 
   /**
-   * Check if VSS extension is enabled
+   * Check if vec extension is enabled
    */
-  isVssEnabled(): boolean {
-    return this.vssEnabled;
+  isVecEnabled(): boolean {
+    return this.vecEnabled;
   }
 
   /**
@@ -162,50 +147,27 @@ export class VectorSearchManager {
       )
       .run(nodeId, blob, model, now);
 
-    // Also store in VSS table if enabled
-    if (this.vssEnabled) {
-      this.storeInVss(nodeId, embedding);
+    // Also store in vec table if enabled
+    if (this.vecEnabled) {
+      this.storeInVec(nodeId, embedding);
     }
   }
 
   /**
-   * Store vector in VSS virtual table
+   * Store vector in vec virtual table
    */
-  private storeInVss(nodeId: string, embedding: Float32Array): void {
+  private storeInVec(nodeId: string, embedding: Float32Array): void {
     try {
-      // Check if already exists
-      const existing = this.db
-        .prepare('SELECT rowid FROM vss_map WHERE node_id = ?')
-        .get(nodeId) as { rowid: number } | undefined;
+      const buffer = Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength);
 
-      if (existing) {
-        // Update existing vector
-        const vectorJson = JSON.stringify(Array.from(embedding));
-        this.db
-          .prepare('UPDATE vss_vectors SET embedding = ? WHERE rowid = ?')
-          .run(vectorJson, existing.rowid);
-      } else {
-        // Insert new vector - get max rowid and increment
-        const maxRow = this.db
-          .prepare('SELECT MAX(rowid) as max FROM vss_map')
-          .get() as { max: number | null } | undefined;
-        const newRowid = (maxRow?.max ?? 0) + 1;
-
-        const vectorJson = JSON.stringify(Array.from(embedding));
-        this.db
-          .prepare('INSERT INTO vss_vectors (rowid, embedding) VALUES (?, ?)')
-          .run(newRowid, vectorJson);
-
-        // Map the rowid to node_id
-        this.db
-          .prepare('INSERT INTO vss_map (rowid, node_id) VALUES (?, ?)')
-          .run(newRowid, nodeId);
-      }
+      // Delete existing entry if present, then insert
+      this.db.prepare('DELETE FROM vec_vectors WHERE node_id = ?').run(nodeId);
+      this.db
+        .prepare('INSERT INTO vec_vectors(node_id, embedding) VALUES (?, ?)')
+        .run(nodeId, buffer);
     } catch (error) {
-      // VSS operations can fail for various reasons (dimension mismatch, etc.)
-      // Fall back to brute-force search silently
       console.warn(
-        'VSS storage failed, using brute-force search:',
+        'vec storage failed, using brute-force search:',
         error instanceof Error ? error.message : String(error)
       );
     }
@@ -236,8 +198,8 @@ export class VectorSearchManager {
           )
           .run(entry.nodeId, blob, model, now);
 
-        if (this.vssEnabled) {
-          this.storeInVss(entry.nodeId, entry.embedding);
+        if (this.vecEnabled) {
+          this.storeInVec(entry.nodeId, entry.embedding);
         }
       }
     })();
@@ -272,16 +234,8 @@ export class VectorSearchManager {
   deleteVector(nodeId: string): void {
     this.db.prepare('DELETE FROM vectors WHERE node_id = ?').run(nodeId);
 
-    if (this.vssEnabled) {
-      // Get the rowid before deleting
-      const mapping = this.db
-        .prepare('SELECT rowid FROM vss_map WHERE node_id = ?')
-        .get(nodeId) as { rowid: number } | undefined;
-
-      if (mapping) {
-        this.db.prepare('DELETE FROM vss_vectors WHERE rowid = ?').run(mapping.rowid);
-        this.db.prepare('DELETE FROM vss_map WHERE node_id = ?').run(nodeId);
-      }
+    if (this.vecEnabled) {
+      this.db.prepare('DELETE FROM vec_vectors WHERE node_id = ?').run(nodeId);
     }
   }
 
@@ -298,45 +252,42 @@ export class VectorSearchManager {
   ): Array<{ nodeId: string; score: number }> {
     const { limit = 10, minScore = 0 } = options;
 
-    if (this.vssEnabled) {
-      return this.searchWithVss(queryEmbedding, limit, minScore);
+    if (this.vecEnabled) {
+      return this.searchWithVec(queryEmbedding, limit, minScore);
     } else {
       return this.searchBruteForce(queryEmbedding, limit, minScore);
     }
   }
 
   /**
-   * Search using sqlite-vss KNN search
+   * Search using sqlite-vec KNN search
    */
-  private searchWithVss(
+  private searchWithVec(
     queryEmbedding: Float32Array,
     limit: number,
     minScore: number
   ): Array<{ nodeId: string; score: number }> {
     try {
-      const vectorJson = JSON.stringify(Array.from(queryEmbedding));
-      // Sanitize limit to prevent SQL injection (ensure it's a positive integer)
+      const buffer = Buffer.from(
+        queryEmbedding.buffer,
+        queryEmbedding.byteOffset,
+        queryEmbedding.byteLength
+      );
       const safeLimit = Math.max(1, Math.floor(limit));
 
-      // Use VSS KNN search
-      // The distance is L2 (euclidean), we need to convert to similarity score
-      // Note: sqlite-vss requires LIMIT to be a literal, not a parameter
+      // Use vec0 KNN search with MATCH syntax
       const rows = this.db
         .prepare(
           `
-          SELECT m.node_id, v.distance
-          FROM (
-            SELECT rowid, distance
-            FROM vss_vectors
-            WHERE vss_search(embedding, ?)
-            LIMIT ${safeLimit}
-          ) v
-          JOIN vss_map m ON m.rowid = v.rowid
+          SELECT node_id, distance
+          FROM vec_vectors
+          WHERE embedding MATCH ?
+            AND k = ${safeLimit}
         `
         )
-        .all(vectorJson) as Array<{ node_id: string; distance: number }>;
+        .all(buffer) as Array<{ node_id: string; distance: number }>;
 
-      // Convert L2 distance to similarity score (1 / (1 + distance))
+      // Convert distance to similarity score (1 / (1 + distance))
       return rows
         .map((row) => ({
           nodeId: row.node_id,
@@ -344,9 +295,9 @@ export class VectorSearchManager {
         }))
         .filter((r) => r.score >= minScore);
     } catch (error) {
-      // VSS search failed, fall back to brute force
+      // vec search failed, fall back to brute force
       console.warn(
-        'VSS search failed, using brute-force:',
+        'vec search failed, using brute-force:',
         error instanceof Error ? error.message : String(error)
       );
       return this.searchBruteForce(queryEmbedding, limit, minScore);
@@ -423,25 +374,23 @@ export class VectorSearchManager {
   clear(): void {
     this.db.prepare('DELETE FROM vectors').run();
 
-    if (this.vssEnabled) {
-      this.db.prepare('DELETE FROM vss_vectors').run();
-      this.db.prepare('DELETE FROM vss_map').run();
+    if (this.vecEnabled) {
+      this.db.prepare('DELETE FROM vec_vectors').run();
     }
   }
 
   /**
-   * Rebuild VSS index from vectors table
+   * Rebuild vec index from vectors table
    *
-   * Useful after bulk operations or if VSS index gets out of sync.
+   * Useful after bulk operations or if vec index gets out of sync.
    */
-  rebuildVssIndex(): void {
-    if (!this.vssEnabled) {
+  rebuildVecIndex(): void {
+    if (!this.vecEnabled) {
       return;
     }
 
-    // Clear VSS tables
-    this.db.prepare('DELETE FROM vss_vectors').run();
-    this.db.prepare('DELETE FROM vss_map').run();
+    // Clear vec table
+    this.db.prepare('DELETE FROM vec_vectors').run();
 
     // Reload from vectors table
     const rows = this.db
@@ -454,7 +403,7 @@ export class VectorSearchManager {
           row.embedding.byteOffset,
           row.embedding.byteOffset + row.embedding.byteLength
         ));
-        this.storeInVss(row.node_id, embedding);
+        this.storeInVec(row.node_id, embedding);
       }
     })();
   }
