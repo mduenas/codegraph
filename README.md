@@ -499,7 +499,7 @@ cg.close();
 
 ### 1. Extraction
 
-CodeGraph uses [tree-sitter](https://tree-sitter.github.io/) to parse source code into ASTs. Language-specific queries (`.scm` files) extract:
+CodeGraph uses [tree-sitter](https://tree-sitter.github.io/) (via WebAssembly — no native bindings required) to parse source code into ASTs. Language-specific queries (`.scm` files) extract:
 
 - **Nodes**: Functions, methods, classes, interfaces, types, variables
 - **Edges**: Calls, imports, extends, implements, returns_type
@@ -513,7 +513,7 @@ All data is stored in a local SQLite database (`.codegraph/codegraph.db`):
 - **nodes** table: All code entities with metadata
 - **edges** table: Relationships between nodes
 - **files** table: File tracking for incremental updates
-- **node_vectors** / **vector_map**: Embeddings for semantic search (using sqlite-vss)
+- **vectors** table: Embeddings for semantic search (using sqlite-vec)
 
 ### 3. Reference Resolution
 
@@ -526,7 +526,7 @@ After extraction, CodeGraph resolves references:
 
 ### 4. Semantic Search
 
-CodeGraph uses local embeddings (via [@xenova/transformers](https://github.com/xenova/transformers.js)) to enable semantic search:
+CodeGraph uses local embeddings (via [@huggingface/transformers](https://github.com/huggingface/transformers.js)) to enable semantic search:
 
 1. Code symbols are embedded using a transformer model
 2. Queries are embedded and compared using cosine similarity
