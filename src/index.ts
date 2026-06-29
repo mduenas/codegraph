@@ -866,7 +866,7 @@ export class CodeGraph {
    */
   getEmbeddingStats(): {
     totalVectors: number;
-    vssEnabled: boolean;
+    vecEnabled: boolean;
     modelId: string;
     dimension: number;
   } | null {

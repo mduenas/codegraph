@@ -92,7 +92,7 @@ export class VectorManager {
     // Initialize embedder (downloads model if needed)
     await this.embedder.initialize();
 
-    // Initialize vector search (loads sqlite-vss if available)
+    // Initialize vector search (loads sqlite-vec if available)
     await this.searchManager.initialize();
 
     this.initialized = true;
@@ -317,13 +317,13 @@ export class VectorManager {
    */
   getStats(): {
     totalVectors: number;
-    vssEnabled: boolean;
+    vecEnabled: boolean;
     modelId: string;
     dimension: number;
   } {
     return {
       totalVectors: this.searchManager.getVectorCount(),
-      vssEnabled: this.searchManager.isVssEnabled(),
+      vecEnabled: this.searchManager.isVecEnabled(),
       modelId: this.embedder.getModelId(),
       dimension: this.embedder.getDimension(),
     };
@@ -337,10 +337,10 @@ export class VectorManager {
   }
 
   /**
-   * Rebuild the VSS index
+   * Rebuild the vec index
    */
   rebuildIndex(): void {
-    this.searchManager.rebuildVssIndex();
+    this.searchManager.rebuildVecIndex();
   }
 
   /**
