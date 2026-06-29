@@ -12,13 +12,13 @@ import { homedir } from 'os';
 // Global model cache directory (shared across all projects)
 const GLOBAL_MODELS_DIR = path.join(homedir(), '.codegraph', 'models');
 
-// Dynamic import for @xenova/transformers (ESM-only package)
+// Dynamic import for @huggingface/transformers (ESM-only package)
 // We use dynamic import to support CommonJS builds
-let transformersModule: typeof import('@xenova/transformers') | null = null;
+let transformersModule: typeof import('@huggingface/transformers') | null = null;
 
 async function getTransformers() {
   if (!transformersModule) {
-    transformersModule = await import('@xenova/transformers');
+    transformersModule = await import('@huggingface/transformers');
   }
   return transformersModule;
 }
