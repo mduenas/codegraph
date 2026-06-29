@@ -18,7 +18,7 @@ import {
 } from '../types';
 import { QueryBuilder } from '../db/queries';
 import { extractFromSource } from './tree-sitter';
-import { detectLanguage, isLanguageSupported } from './grammars';
+import { detectLanguage, isLanguageSupported, initGrammars, loadAllGrammars } from './grammars';
 import { logDebug } from '../errors';
 import { validatePathWithinRoot, normalizePath } from '../utils';
 
@@ -277,6 +277,10 @@ export class ExtractionOrchestrator {
     let filesSkipped = 0;
     let totalNodes = 0;
     let totalEdges = 0;
+
+    // Phase 0: Initialize WASM grammar runtime
+    await initGrammars();
+    await loadAllGrammars();
 
     // Phase 1: Scan for files
     onProgress?.({
@@ -547,6 +551,9 @@ export class ExtractionOrchestrator {
     let filesRemoved = 0;
     let nodesUpdated = 0;
 
+    await initGrammars();
+    await loadAllGrammars();
+
     // Get current files on disk
     onProgress?.({
       phase: 'scanning',
@@ -665,4 +672,4 @@ export class ExtractionOrchestrator {
 
 // Re-export useful types and functions
 export { extractFromSource } from './tree-sitter';
-export { detectLanguage, isLanguageSupported, getSupportedLanguages } from './grammars';
+export { detectLanguage, isLanguageSupported, getSupportedLanguages, initGrammars, loadAllGrammars } from './grammars';

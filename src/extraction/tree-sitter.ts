@@ -4,7 +4,7 @@
  * Handles parsing source code and extracting structural information.
  */
 
-import { SyntaxNode, Tree } from 'tree-sitter';
+import { Node as SyntaxNode, Tree } from 'web-tree-sitter';
 import * as crypto from 'crypto';
 import {
   Language,
@@ -907,7 +907,9 @@ export class TreeSitterExtractor {
     }
 
     try {
-      this.tree = parser.parse(this.source);
+      const parseResult = parser.parse(this.source);
+      if (!parseResult) throw new Error('Parser returned null');
+      this.tree = parseResult;
       this.visitNode(this.tree.rootNode);
     } catch (error) {
       this.errors.push({
