@@ -461,7 +461,7 @@ export class ExtractionOrchestrator {
     }
 
     // Detect language
-    const language = detectLanguage(relativePath);
+    const language = detectLanguage(relativePath, content);
     if (!isLanguageSupported(language)) {
       return {
         nodes: [],

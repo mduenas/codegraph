@@ -115,6 +115,7 @@ describe('Language Support', () => {
     expect(languages).toContain('ruby');
     expect(languages).toContain('swift');
     expect(languages).toContain('kotlin');
+    expect(languages).toContain('objc');
   });
 });
 
@@ -1138,6 +1139,165 @@ fun main() {
   });
 });
 
+describe('Objective-C Extraction', () => {
+  const header = `#import <Foundation/Foundation.h>
+
+NS_ASSUME_NONNULL_BEGIN
+
+typedef NS_ENUM(NSInteger, FooColor) {
+    FooColorRed,
+    FooColorBlue = 5,
+};
+
+@interface Foo : NSObject <Greeter, NSCopying>
+@property (nonatomic, copy) NSString *title;
+@property (class, nonatomic, readonly) Foo *shared;
+- (instancetype)initWithName:(NSString *)name NS_DESIGNATED_INITIALIZER;
+- (NSInteger)addA:(NSInteger)a toB:(NSInteger)b;
++ (void)build;
+@end
+
+@interface Foo (Extras)
+- (void)extra;
+@end
+
+@protocol Greeter <NSObject>
+- (void)greet:(NSString *)name;
+@end
+
+NS_ASSUME_NONNULL_END
+`;
+
+  const implementation = `#import "Foo.h"
+
+@implementation Foo
++ (instancetype)shared { return [[Foo alloc] init]; }
+- (NSInteger)addA:(NSInteger)a toB:(NSInteger)b {
+    [self log:@"x"];
+    [Helper doThing:a withB:b];
+    helper(a);
+    return a + b;
+}
+@end
+
+static NSString *helper(int x) { return @""; }
+`;
+
+  it('should detect Objective-C files', () => {
+    expect(detectLanguage('Foo.m')).toBe('objc');
+    expect(detectLanguage('Foo.mm')).toBe('objc');
+    expect(isLanguageSupported('objc')).toBe(true);
+    expect(getSupportedLanguages()).toContain('objc');
+  });
+
+  it('should detect Objective-C headers by content and keep C headers as C', () => {
+    expect(detectLanguage('Foo.h')).toBe('c'); // no content: ambiguous, stays C
+    expect(detectLanguage('Foo.h', header)).toBe('objc');
+    expect(detectLanguage('Foo.h', '@class Bar;\n')).toBe('objc');
+    expect(detectLanguage('plain.h', '#ifndef X_H\nint add(int a, int b);\n#endif\n')).toBe('c');
+  });
+
+  it('should extract classes, categories, protocols and members from a header', () => {
+    const result = extractFromSource('Foo.h', header);
+    const find = (kind: string, name: string) =>
+      result.nodes.find((n) => n.kind === kind && n.name === name);
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.nodes.every((n) => n.language === 'objc')).toBe(true);
+
+    // NS_ASSUME_NONNULL_BEGIN must not break the @interface that follows it
+    const foo = find('class', 'Foo');
+    expect(foo).toBeDefined();
+    expect(foo?.startLine).toBe(10);
+    expect(find('class', 'Foo(Extras)')).toBeDefined();
+    expect(find('interface', 'Greeter')).toBeDefined();
+
+    expect(find('property', 'title')).toBeDefined();
+    expect(find('property', 'shared')?.isStatic).toBe(true);
+
+    // Selectors, including trailing attribute macros and class methods
+    expect(find('method', 'initWithName:')).toBeDefined();
+    expect(find('method', 'addA:toB:')).toBeDefined();
+    expect(find('method', 'build')?.isStatic).toBe(true);
+    expect(find('method', 'greet:')).toBeDefined();
+    expect(result.nodes.some((n) => n.name === 'NS_DESIGNATED_INITIALIZER')).toBe(false);
+
+    // Members are contained in their class
+    const addMethod = find('method', 'addA:toB:')!;
+    expect(result.edges.some((e) => e.kind === 'contains' && e.source === foo!.id && e.target === addMethod.id)).toBe(true);
+  });
+
+  it('should extract NS_ENUM typedefs with members and correct lines', () => {
+    const result = extractFromSource('Foo.h', header);
+    const colorEnum = result.nodes.find((n) => n.kind === 'enum' && n.name === 'FooColor');
+    expect(colorEnum).toBeDefined();
+    expect(colorEnum?.startLine).toBe(5);
+
+    const members = result.nodes.filter((n) => n.kind === 'enum_member').map((n) => n.name);
+    expect(members).toEqual(['FooColorRed', 'FooColorBlue']);
+  });
+
+  it('should record superclass, protocol and category relationships', () => {
+    const result = extractFromSource('Foo.h', header);
+    const refs = result.unresolvedReferences;
+
+    expect(refs.some((r) => r.referenceKind === 'extends' && r.referenceName === 'NSObject')).toBe(true);
+    expect(refs.some((r) => r.referenceKind === 'implements' && r.referenceName === 'Greeter')).toBe(true);
+    expect(refs.some((r) => r.referenceKind === 'implements' && r.referenceName === 'NSCopying')).toBe(true);
+    // Category extends the class it adds to
+    expect(refs.some((r) => r.referenceKind === 'extends' && r.referenceName === 'Foo')).toBe(true);
+  });
+
+  it('should not treat lightweight generics as protocol conformance', () => {
+    const result = extractFromSource(
+      'Box.h',
+      `@interface Box<ObjectType> : NSObject <NSCopying>
+- (void)each:(void (^)(ObjectType obj))block;
+@end
+`
+    );
+    const implemented = result.unresolvedReferences
+      .filter((r) => r.referenceKind === 'implements')
+      .map((r) => r.referenceName);
+    expect(implemented).toEqual(['NSCopying']);
+  });
+
+  it('should extract implementations, C functions and message sends from a .m file', () => {
+    const result = extractFromSource('Foo.m', implementation);
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.nodes.find((n) => n.kind === 'class' && n.name === 'Foo')).toBeDefined();
+    expect(result.nodes.find((n) => n.kind === 'method' && n.name === 'shared')?.isStatic).toBe(true);
+    expect(result.nodes.find((n) => n.kind === 'method' && n.name === 'addA:toB:')).toBeDefined();
+    // Pointer-returning C function keeps a clean name
+    expect(result.nodes.find((n) => n.kind === 'function' && n.name === 'helper')).toBeDefined();
+
+    const calls = result.unresolvedReferences
+      .filter((r) => r.referenceKind === 'calls')
+      .map((r) => r.referenceName);
+    expect(calls).toContain('log:');
+    expect(calls).toContain('doThing:withB:');
+    expect(calls).toContain('alloc');
+    expect(calls).toContain('init');
+    expect(calls).toContain('helper');
+
+    const instantiates = result.unresolvedReferences.filter((r) => r.referenceKind === 'instantiates');
+    expect(instantiates.map((r) => r.referenceName)).toContain('Foo');
+  });
+
+  it('should extract class extensions with private properties', () => {
+    const result = extractFromSource(
+      'Foo.m',
+      `@interface Foo ()
+@property (nonatomic, strong) NSString *secret;
+@end
+`
+    );
+    expect(result.nodes.find((n) => n.kind === 'class' && n.name === 'Foo()')).toBeDefined();
+    expect(result.nodes.find((n) => n.kind === 'property' && n.name === 'secret')).toBeDefined();
+  });
+});
+
 describe('Full Indexing', () => {
   let tempDir: string;
 
@@ -1181,6 +1341,38 @@ export function multiply(a: number, b: number): number {
     const addFunc = nodes.find((n) => n.name === 'add');
     expect(addFunc).toBeDefined();
     expect(addFunc?.kind).toBe('function');
+
+    cg.close();
+  });
+
+  it('should index Objective-C .m and .h files', async () => {
+    const srcDir = path.join(tempDir, 'Sources');
+    fs.mkdirSync(srcDir);
+    fs.writeFileSync(
+      path.join(srcDir, 'Greeter.h'),
+      `NS_ASSUME_NONNULL_BEGIN
+@interface Greeter : NSObject
+- (void)greet:(NSString *)name;
+@end
+NS_ASSUME_NONNULL_END
+`
+    );
+    fs.writeFileSync(
+      path.join(srcDir, 'Greeter.m'),
+      `#import "Greeter.h"
+@implementation Greeter
+- (void)greet:(NSString *)name { NSLog(@"%@", name); }
+@end
+`
+    );
+
+    const cg = CodeGraph.initSync(tempDir);
+    const result = await cg.indexAll();
+
+    expect(result.success).toBe(true);
+    expect(result.filesIndexed).toBe(2);
+    expect(cg.getNodesInFile('Sources/Greeter.m').some((n) => n.kind === 'method' && n.name === 'greet:')).toBe(true);
+    expect(cg.getNodesInFile('Sources/Greeter.h').some((n) => n.kind === 'class' && n.name === 'Greeter')).toBe(true);
 
     cg.close();
   });

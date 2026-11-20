@@ -308,6 +308,59 @@ function isSwiftConstant(node: SyntaxNode): boolean {
 }
 
 
+// =============================================================================
+// Objective-C-specific Helper Functions
+// =============================================================================
+
+/**
+ * Lines that consist only of a nullability/audit region macro
+ * (NS_ASSUME_NONNULL_BEGIN, NS_HEADER_AUDIT_END(...), ...). tree-sitter-objc
+ * mis-parses the declaration that follows such a line, so they are blanked
+ * out (length-preserving) before parsing.
+ */
+const OBJC_REGION_MACRO_LINE =
+  /^[ \t]*(?:(?:NS|CF)_ASSUME_NONNULL_(?:BEGIN|END)|(?:NS|CF)_HEADER_AUDIT_(?:BEGIN|END)(?:\([^)\n]*\))?)[ \t]*(?:\/\/.*)?$/gm;
+
+/**
+ * Attribute/availability macros placed in front of @interface, @protocol or
+ * @implementation (e.g. `NS_SWIFT_NAME(Foo)`, `API_AVAILABLE(ios(13.0))`,
+ * `__attribute__((objc_subclassing_restricted))`). Blanked before parsing.
+ */
+const OBJC_DECL_PREFIX_MACROS =
+  /^[ \t]*(?:(?:[A-Z][A-Z0-9_]*|__attribute__)[ \t]*(?:\((?:[^()\n]|\((?:[^()\n]|\([^()\n]*\))*\))*\))?\s+)+(?=@(?:interface|protocol|implementation)\b)/gm;
+
+/**
+ * `typedef NS_ENUM(NSInteger, Name) { ... };` (also NS_OPTIONS,
+ * NS_CLOSED_ENUM, NS_ERROR_ENUM). The grammar cannot parse these macro
+ * forms, so they are extracted with a regex and blanked before parsing.
+ * Group 1 is the enum name, group 2 the body.
+ */
+const OBJC_NS_ENUM =
+  /typedef\s+NS_(?:CLOSED_)?(?:ENUM|OPTIONS|ERROR_ENUM)\s*\(\s*[A-Za-z_][\w\s]*?,\s*([A-Za-z_]\w*)\s*\)\s*\{([^}]*)\}\s*(?:NS_[A-Z_]+(?:\([^)]*\))?\s*)*;?/g;
+
+/** Replace every character except newlines with a space (keeps offsets and line numbers). */
+function blankOut(text: string): string {
+  return text.replace(/[^\r\n]/g, ' ');
+}
+
+/**
+ * Resolve the declared identifier of a (possibly nested) C declarator, e.g.
+ * `*name`, `(^handler)(int)`, `argv[]`, `helper(int x)`.
+ */
+function getObjcDeclaratorName(node: SyntaxNode | null, source: string, depth = 0): string | null {
+  if (!node || depth > 12) return null;
+  if (node.type === 'identifier' || node.type === 'field_identifier') {
+    return getNodeText(node, source);
+  }
+  const next = node.childForFieldName('declarator') ?? node.namedChild(0);
+  return getObjcDeclaratorName(next, source, depth + 1);
+}
+
+/** Collapse whitespace so multi-line declarations make readable signatures. */
+function tidySignature(text: string): string {
+  return text.replace(/\s+/g, ' ').replace(/\s*[;{]\s*$/, '').trim();
+}
+
 /**
  * Language-specific extractors
  */
@@ -691,6 +744,21 @@ const EXTRACTORS: Partial<Record<Language, LanguageExtractor>> = {
       return 'public';
     },
   },
+  objc: {
+    // Class/category/protocol/method/property/function extraction is handled
+    // by visitObjcNode(); the generic tables below cover the C subset.
+    functionTypes: ['function_definition'],
+    classTypes: [],
+    methodTypes: [],
+    interfaceTypes: [],
+    structTypes: ['struct_specifier'],
+    enumTypes: ['enum_specifier'],
+    importTypes: ['preproc_include', 'module_import'],
+    callTypes: ['call_expression', 'message_expression'],
+    nameField: 'declarator',
+    bodyField: 'body',
+    paramsField: 'parameters',
+  },
   swift: {
     functionTypes: ['function_declaration'],
     classTypes: ['class_declaration'],
@@ -865,7 +933,7 @@ export class TreeSitterExtractor {
   constructor(filePath: string, source: string, language?: Language) {
     this.filePath = filePath;
     this.source = source;
-    this.language = language || detectLanguage(filePath);
+    this.language = language || detectLanguage(filePath, source);
     this.extractor = EXTRACTORS[this.language] || null;
   }
 
@@ -907,10 +975,20 @@ export class TreeSitterExtractor {
     }
 
     try {
-      const parseResult = parser.parse(this.source);
+      let parseSource = this.source;
+      let objcEnums: RegExpExecArray[] = [];
+      if (this.language === 'objc') {
+        const prepared = this.prepareObjcSource();
+        parseSource = prepared.parseSource;
+        objcEnums = prepared.enums;
+      }
+      const parseResult = parser.parse(parseSource);
       if (!parseResult) throw new Error('Parser returned null');
       this.tree = parseResult;
       this.visitNode(this.tree.rootNode);
+      for (const match of objcEnums) {
+        this.extractObjcNsEnum(match);
+      }
     } catch (error) {
       this.errors.push({
         message: `Parse error: ${error instanceof Error ? error.message : String(error)}`,
@@ -932,6 +1010,10 @@ export class TreeSitterExtractor {
    */
   private visitNode(node: SyntaxNode): void {
     if (!this.extractor) return;
+
+    if (this.language === 'objc' && this.visitObjcNode(node)) {
+      return;
+    }
 
     const nodeType = node.type;
     let skipChildren = false;
@@ -1067,7 +1149,10 @@ export class TreeSitterExtractor {
   private createNode(
     kind: NodeKind,
     name: string,
-    node: SyntaxNode,
+    node: {
+      startPosition: { row: number; column: number };
+      endPosition: { row: number; column: number };
+    },
     extra?: Partial<Node>
   ): Node {
     const id = generateNodeId(this.filePath, kind, name, node.startPosition.row + 1);
@@ -1319,6 +1404,13 @@ export class TreeSitterExtractor {
       if (path) {
         moduleName = getNodeText(path, this.source).replace(/['"]/g, '');
       }
+    } else if (this.language === 'objc') {
+      // #import <Foundation/Foundation.h> | #import "Foo.h" | @import UIKit;
+      const target = getChildByField(node, 'path') || node.namedChild(0);
+      if (target) {
+        const inner = target.type === 'string_literal' ? target.namedChild(0) : null;
+        moduleName = getNodeText(inner || target, this.source).replace(/^[<"]|[>"]$/g, '');
+      }
     } else {
       // Generic extraction
       moduleName = importText;
@@ -1346,6 +1438,11 @@ export class TreeSitterExtractor {
 
     const callerId = this.nodeStack[this.nodeStack.length - 1];
     if (!callerId) return;
+
+    if (node.type === 'message_expression') {
+      this.extractObjcMessageSend(node, callerId);
+      return;
+    }
 
     // Get the function/method being called
     let calleeName = '';
@@ -1448,6 +1545,387 @@ export class TreeSitterExtractor {
         }
       }
     }
+  }
+
+  // =============================================================================
+  // Objective-C-specific Extraction Methods
+  // =============================================================================
+
+  /**
+   * Prepare Objective-C source for parsing: blank out constructs the grammar
+   * cannot handle (length-preserving, so node positions still match the
+   * original source) and collect NS_ENUM-style typedefs for regex extraction.
+   */
+  private prepareObjcSource(): { parseSource: string; enums: RegExpExecArray[] } {
+    const enums: RegExpExecArray[] = [];
+    const enumRegex = new RegExp(OBJC_NS_ENUM.source, 'g');
+    let match: RegExpExecArray | null;
+    while ((match = enumRegex.exec(this.source)) !== null) {
+      enums.push(match);
+    }
+
+    let parseSource = this.source
+      .replace(OBJC_REGION_MACRO_LINE, blankOut)
+      .replace(OBJC_DECL_PREFIX_MACROS, blankOut);
+
+    for (const m of enums) {
+      parseSource =
+        parseSource.slice(0, m.index) + blankOut(m[0]) + parseSource.slice(m.index + m[0].length);
+    }
+    return { parseSource, enums };
+  }
+
+  /** Convert a character index in the original source to a row/column. */
+  private positionAt(index: number): { row: number; column: number } {
+    let row = 0;
+    let lineStart = 0;
+    for (let i = this.source.indexOf('\n'); i !== -1 && i < index; i = this.source.indexOf('\n', i + 1)) {
+      row++;
+      lineStart = i + 1;
+    }
+    return { row, column: index - lineStart };
+  }
+
+  /**
+   * Extract `typedef NS_ENUM(Type, Name) { A, B = 2 };` as an enum with members.
+   */
+  private extractObjcNsEnum(match: RegExpExecArray): void {
+    const name = match[1];
+    if (!name) return;
+    const start = match.index;
+    const end = start + match[0].length;
+    const enumNode = this.createNode(
+      'enum',
+      name,
+      { startPosition: this.positionAt(start), endPosition: this.positionAt(end) },
+      { signature: tidySignature(match[0].slice(0, match[0].indexOf('{'))) }
+    );
+
+    const bodyStart = start + match[0].indexOf('{') + 1;
+    const body = (match[2] ?? '').replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, blankOut);
+    const memberRegex = /(?:^|,)\s*([A-Za-z_]\w*)/g;
+    let member: RegExpExecArray | null;
+
+    this.nodeStack.push(enumNode.id);
+    while ((member = memberRegex.exec(body)) !== null) {
+      const memberName = member[1];
+      if (!memberName) continue;
+      const nameIndex = bodyStart + member.index + member[0].lastIndexOf(memberName);
+      const pos = this.positionAt(nameIndex);
+      this.createNode(
+        'enum_member',
+        memberName,
+        {
+          startPosition: pos,
+          endPosition: { row: pos.row, column: pos.column + memberName.length },
+        }
+      );
+    }
+    this.nodeStack.pop();
+  }
+
+  /**
+   * Dispatch Objective-C-specific node types. Returns true when the node
+   * (including its children) was fully handled.
+   */
+  private visitObjcNode(node: SyntaxNode): boolean {
+    switch (node.type) {
+      case 'class_interface':
+      case 'class_implementation':
+        this.extractObjcClass(node);
+        return true;
+      case 'protocol_declaration':
+        this.extractObjcProtocol(node);
+        return true;
+      case 'method_declaration':
+      case 'method_definition':
+        this.extractObjcMethod(node);
+        return true;
+      case 'property_declaration':
+        this.extractObjcProperty(node);
+        return true;
+      case 'instance_variables':
+        this.extractObjcInstanceVariables(node);
+        return true;
+      case 'function_definition':
+        this.extractObjcFunction(node);
+        return true;
+      case 'class_declaration': // @class Foo, Bar;
+      case 'protocol_forward_declaration': // @protocol Foo;
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  /**
+   * Extract @interface / @implementation, including categories
+   * (`@interface Foo (Extras)`) and class extensions (`@interface Foo ()`).
+   */
+  private extractObjcClass(node: SyntaxNode): void {
+    let baseName: string | null = null;
+    let superclass: SyntaxNode | null = null;
+    let category: string | null = null;
+    let hasCategoryParens = false;
+
+    for (let i = 0; i < node.childCount; i++) {
+      const child = node.child(i);
+      if (!child) continue;
+      const field = node.fieldNameForChild(i);
+      if (child.type === '(') hasCategoryParens = true;
+      if (child.type !== 'identifier') continue;
+      if (field === 'superclass') superclass = child;
+      else if (field === 'category') category = getNodeText(child, this.source);
+      else if (baseName === null) baseName = getNodeText(child, this.source);
+    }
+    if (!baseName) return;
+
+    const isImplementation = node.type === 'class_implementation';
+    const isCategory = category !== null || hasCategoryParens;
+    const name = isCategory ? `${baseName}(${category ?? ''})` : baseName;
+
+    const headerEnd = node.text.search(/[\n{]/);
+    const classNode = this.createNode('class', name, node, {
+      docstring: getPrecedingDocstring(node, this.source),
+      signature: tidySignature(headerEnd === -1 ? node.text : node.text.slice(0, headerEnd)),
+    });
+
+    if (isCategory) {
+      this.pushObjcRef(classNode.id, baseName, 'extends', node);
+    }
+    if (!isImplementation) {
+      if (superclass) {
+        this.pushObjcRef(classNode.id, getNodeText(superclass, this.source), 'extends', superclass);
+      }
+      for (let i = 0; i < node.namedChildCount; i++) {
+        const child = node.namedChild(i);
+        if (child?.type !== 'parameterized_arguments') continue;
+        // `Box<ObjectType> : NSObject <P>`: a list before the superclass is
+        // the lightweight-generics parameter list, not protocol conformance.
+        if (superclass && child.startIndex < superclass.startIndex) continue;
+        for (let j = 0; j < child.namedChildCount; j++) {
+          const protocol = child.namedChild(j);
+          if (protocol) {
+            this.pushObjcRef(classNode.id, getNodeText(protocol, this.source), 'implements', protocol);
+          }
+        }
+      }
+    }
+
+    this.nodeStack.push(classNode.id);
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child) this.visitNode(child);
+    }
+    this.nodeStack.pop();
+  }
+
+  /**
+   * Extract @protocol declarations.
+   */
+  private extractObjcProtocol(node: SyntaxNode): void {
+    let name: string | null = null;
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child?.type === 'identifier') {
+        name = getNodeText(child, this.source);
+        break;
+      }
+    }
+    if (!name) return;
+
+    const headerEnd = node.text.search(/[\n]/);
+    const protocolNode = this.createNode('interface', name, node, {
+      docstring: getPrecedingDocstring(node, this.source),
+      signature: tidySignature(headerEnd === -1 ? node.text : node.text.slice(0, headerEnd)),
+    });
+
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child?.type !== 'protocol_reference_list') continue;
+      for (let j = 0; j < child.namedChildCount; j++) {
+        const parent = child.namedChild(j);
+        if (parent) {
+          this.pushObjcRef(protocolNode.id, getNodeText(parent, this.source), 'extends', parent);
+        }
+      }
+    }
+
+    this.nodeStack.push(protocolNode.id);
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child) this.visitNode(child);
+    }
+    this.nodeStack.pop();
+  }
+
+  /**
+   * Build the full selector of a method, e.g. `addA:toB:` or `shared`.
+   * Trailing attribute macros (NS_DESIGNATED_INITIALIZER, ...) are ignored.
+   */
+  private getObjcSelector(node: SyntaxNode): string {
+    let selector = '';
+    let sawFirstPart = false;
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (!child) continue;
+      if (child.type === 'identifier') {
+        const hasArgument = node.namedChild(i + 1)?.type === 'method_parameter';
+        if (!sawFirstPart || hasArgument) {
+          selector += getNodeText(child, this.source) + (hasArgument ? ':' : '');
+          sawFirstPart = true;
+        }
+      } else if (child.type === 'method_parameter' && sawFirstPart) {
+        // Keyword part with an empty name (`- (void)foo:(int)a :(int)b`).
+        if (node.namedChild(i - 1)?.type === 'method_parameter') selector += ':';
+      }
+    }
+    return selector;
+  }
+
+  /**
+   * Extract a method declaration or definition (instance `-` or class `+`).
+   */
+  private extractObjcMethod(node: SyntaxNode): void {
+    const name = this.getObjcSelector(node);
+    if (!name) return;
+
+    const body = node.namedChildren.find((c) => c?.type === 'compound_statement') ?? null;
+    const signatureEnd = body ? body.startIndex : node.endIndex;
+    const methodNode = this.createNode('method', name, node, {
+      docstring: getPrecedingDocstring(node, this.source),
+      signature: tidySignature(this.source.slice(node.startIndex, signatureEnd)),
+      isStatic: node.child(0)?.type === '+',
+    });
+
+    if (body) {
+      this.nodeStack.push(methodNode.id);
+      this.visitFunctionBody(body, methodNode.id);
+      this.nodeStack.pop();
+    }
+  }
+
+  /**
+   * Extract an @property declaration.
+   */
+  private extractObjcProperty(node: SyntaxNode): void {
+    const declaration = node.namedChildren.find((c) => c?.type === 'struct_declaration') ?? null;
+    const declarator = declaration?.namedChildren.find((c) => c?.type === 'struct_declarator') ?? null;
+    const name = getObjcDeclaratorName(declarator ?? null, this.source);
+    if (!name) return;
+
+    const attributes = node.namedChildren.find((c) => c?.type === 'property_attributes_declaration');
+    const isClassProperty = !!attributes && /\bclass\b/.test(attributes.text);
+
+    this.createNode('property', name, node, {
+      docstring: getPrecedingDocstring(node, this.source),
+      signature: tidySignature(node.text),
+      isStatic: isClassProperty,
+    });
+  }
+
+  /**
+   * Extract instance variables declared in an `@interface Foo { ... }` or
+   * `@implementation Foo { ... }` block.
+   */
+  private extractObjcInstanceVariables(node: SyntaxNode): void {
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const variable = node.namedChild(i);
+      if (variable?.type !== 'instance_variable') continue;
+      for (let j = 0; j < variable.namedChildCount; j++) {
+        const declaration = variable.namedChild(j);
+        if (declaration?.type !== 'struct_declaration') continue;
+        for (let k = 0; k < declaration.namedChildCount; k++) {
+          const declarator = declaration.namedChild(k);
+          if (declarator?.type !== 'struct_declarator') continue;
+          const name = getObjcDeclaratorName(declarator, this.source);
+          if (name) {
+            this.createNode('field', name, declaration, {
+              signature: tidySignature(declaration.text),
+            });
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Extract a plain C function defined in an Objective-C file.
+   */
+  private extractObjcFunction(node: SyntaxNode): void {
+    const name = getObjcDeclaratorName(node.childForFieldName('declarator'), this.source);
+    if (!name) {
+      // Unparseable fragment (e.g. unknown macro): still look inside it.
+      for (let i = 0; i < node.namedChildCount; i++) {
+        const child = node.namedChild(i);
+        if (child) this.visitNode(child);
+      }
+      return;
+    }
+
+    const body = node.childForFieldName('body');
+    const isStaticFunction = node.namedChildren.some(
+      (c) => c?.type === 'storage_class_specifier' && c.text === 'static'
+    );
+    const funcNode = this.createNode('function', name, node, {
+      docstring: getPrecedingDocstring(node, this.source),
+      signature: tidySignature(this.source.slice(node.startIndex, body ? body.startIndex : node.endIndex)),
+      isExported: !isStaticFunction,
+    });
+
+    if (body) {
+      this.nodeStack.push(funcNode.id);
+      this.visitFunctionBody(body, funcNode.id);
+      this.nodeStack.pop();
+    }
+  }
+
+  /**
+   * Record a message send `[receiver doThing:a withB:b]` as a call to the
+   * selector `doThing:withB:`, plus a reference to the receiver when it is a
+   * class name (`[Foo shared]`, `[[Foo alloc] init]`).
+   */
+  private extractObjcMessageSend(node: SyntaxNode, callerId: string): void {
+    let selector = '';
+    for (let i = 0; i < node.childCount; i++) {
+      if (node.fieldNameForChild(i) !== 'method') continue;
+      const part = node.child(i);
+      if (!part) continue;
+      selector += getNodeText(part, this.source) + (node.child(i + 1)?.type === ':' ? ':' : '');
+    }
+    if (!selector) return;
+
+    this.unresolvedReferences.push({
+      fromNodeId: callerId,
+      referenceName: selector,
+      referenceKind: 'calls',
+      line: node.startPosition.row + 1,
+      column: node.startPosition.column,
+    });
+
+    const receiver = node.childForFieldName('receiver');
+    if (receiver?.type === 'identifier') {
+      const receiverName = getNodeText(receiver, this.source);
+      if (/^[A-Z]/.test(receiverName)) {
+        const creates = selector === 'alloc' || selector === 'new';
+        this.pushObjcRef(callerId, receiverName, creates ? 'instantiates' : 'references', receiver);
+      }
+    }
+  }
+
+  private pushObjcRef(
+    fromNodeId: string,
+    referenceName: string,
+    referenceKind: UnresolvedReference['referenceKind'],
+    at: SyntaxNode
+  ): void {
+    this.unresolvedReferences.push({
+      fromNodeId,
+      referenceName,
+      referenceKind,
+      line: at.startPosition.row + 1,
+      column: at.startPosition.column,
+    });
   }
 
   // =============================================================================
@@ -2573,7 +3051,7 @@ export function extractFromSource(
   source: string,
   language?: Language
 ): ExtractionResult {
-  const detectedLanguage = language || detectLanguage(filePath);
+  const detectedLanguage = language || detectLanguage(filePath, source);
 
   // Use custom extractor for Liquid
   if (detectedLanguage === 'liquid') {

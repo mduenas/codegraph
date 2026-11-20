@@ -192,6 +192,33 @@ describe('CodeGraph Foundation', () => {
       expect(config.rootDir).toBe(path.resolve(tempDir));
     });
 
+    it('should add Objective-C patterns to configs saved before .m support', () => {
+      const cg = CodeGraph.initSync(tempDir);
+      cg.close();
+
+      // Simulate a config.json written by an older version
+      const configPath = path.join(tempDir, '.codegraph', 'config.json');
+      const saved = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      saved.include = saved.include.filter((p: string) => p !== '**/*.m' && p !== '**/*.mm');
+      fs.writeFileSync(configPath, JSON.stringify(saved, null, 2));
+
+      const config = loadConfig(tempDir);
+      expect(config.include).toContain('**/*.m');
+      expect(config.include).toContain('**/*.mm');
+    });
+
+    it('should leave custom include lists alone', () => {
+      const cg = CodeGraph.initSync(tempDir);
+      cg.close();
+
+      const configPath = path.join(tempDir, '.codegraph', 'config.json');
+      const saved = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      saved.include = ['src/**/*.ts'];
+      fs.writeFileSync(configPath, JSON.stringify(saved, null, 2));
+
+      expect(loadConfig(tempDir).include).toEqual(['src/**/*.ts']);
+    });
+
     it('should update configuration', () => {
       const cg = CodeGraph.initSync(tempDir);
 

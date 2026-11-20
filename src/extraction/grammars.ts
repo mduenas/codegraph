@@ -33,6 +33,7 @@ const GRAMMAR_WASM_FILES: Partial<Record<Language, string>> = {
   ruby: 'tree-sitter-ruby.wasm',
   swift: 'tree-sitter-swift.wasm',
   kotlin: 'tree-sitter-kotlin.wasm',
+  objc: 'tree-sitter-objc.wasm',
 };
 
 /**
@@ -64,6 +65,10 @@ export const EXTENSION_MAP: Record<string, Language> = {
   '.swift': 'swift',
   '.kt': 'kotlin',
   '.kts': 'kotlin',
+  '.m': 'objc',
+  // Objective-C++: the Objective-C grammar parses the Objective-C parts and
+  // tree-sitter's error recovery tolerates the embedded C++ (best effort).
+  '.mm': 'objc',
   '.liquid': 'liquid',
 };
 
@@ -127,11 +132,26 @@ export function getParser(language: Language): Parser | null {
 }
 
 /**
- * Detect language from file extension
+ * Matches syntax that only occurs in Objective-C, used to tell Objective-C
+ * headers apart from plain C/C++ headers (both use the .h extension).
  */
-export function detectLanguage(filePath: string): Language {
+const OBJC_HEADER_MARKERS =
+  /^[ \t]*(?:@(?:interface|protocol|class|import|implementation)\b|#[ \t]*import\b|NS_ASSUME_NONNULL_BEGIN\b|NS_HEADER_AUDIT_BEGIN\b|NS_ENUM\b|NS_OPTIONS\b)|\btypedef[ \t]+NS_(?:CLOSED_)?(?:ENUM|OPTIONS)\b/m;
+
+/**
+ * Detect language from file extension.
+ *
+ * `.h` is ambiguous (C, C++ or Objective-C). When `source` is provided, a
+ * `.h` file containing Objective-C-only syntax is reported as 'objc';
+ * without `source` it is reported as 'c'.
+ */
+export function detectLanguage(filePath: string, source?: string): Language {
   const ext = filePath.substring(filePath.lastIndexOf('.')).toLowerCase();
-  return EXTENSION_MAP[ext] || 'unknown';
+  const language = EXTENSION_MAP[ext] || 'unknown';
+  if (ext === '.h' && source !== undefined && OBJC_HEADER_MARKERS.test(source)) {
+    return 'objc';
+  }
+  return language;
 }
 
 /**
@@ -181,6 +201,7 @@ export function getLanguageDisplayName(language: Language): string {
     ruby: 'Ruby',
     swift: 'Swift',
     kotlin: 'Kotlin',
+    objc: 'Objective-C',
     liquid: 'Liquid',
     unknown: 'Unknown',
   };

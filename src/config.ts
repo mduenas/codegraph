@@ -81,6 +81,22 @@ export function validateConfig(config: unknown): config is CodeGraphConfig {
 }
 
 /**
+ * Objective-C support was added after configs were first being written to
+ * disk, so an existing `.codegraph/config.json` has a saved `include` list
+ * that never mentions `.m` / `.mm` files and would keep skipping them.
+ *
+ * Add the Objective-C patterns, but only to include lists that look like the
+ * default C-family set (they already scan `**\/*.h`). A deliberately narrow
+ * custom include list is left untouched.
+ */
+function withObjectiveCIncludes(include: string[]): string[] {
+  const objcPatterns = ['**/*.m', '**/*.mm'];
+  if (!include.includes('**/*.h')) return include;
+  const missing = objcPatterns.filter((p) => !include.includes(p));
+  return missing.length > 0 ? [...include, ...missing] : include;
+}
+
+/**
  * Merge configuration with defaults
  */
 function mergeConfig(
@@ -90,7 +106,11 @@ function mergeConfig(
   return {
     version: overrides.version ?? defaults.version,
     rootDir: overrides.rootDir ?? defaults.rootDir,
-    include: overrides.include ?? defaults.include,
+    include: overrides.include
+      ? Array.isArray(overrides.include)
+        ? withObjectiveCIncludes(overrides.include)
+        : overrides.include
+      : defaults.include,
     exclude: overrides.exclude ?? defaults.exclude,
     languages: overrides.languages ?? defaults.languages,
     frameworks: overrides.frameworks ?? defaults.frameworks,

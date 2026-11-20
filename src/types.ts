@@ -71,6 +71,7 @@ export type Language =
   | 'ruby'
   | 'swift'
   | 'kotlin'
+  | 'objc'
   | 'liquid'
   | 'unknown';
 
@@ -495,6 +496,9 @@ export const DEFAULT_CONFIG: CodeGraphConfig = {
     '**/*.kts',
     // Swift
     '**/*.swift',
+    // Objective-C / Objective-C++
+    '**/*.m',
+    '**/*.mm',
     // C/C++
     '**/*.c',
     '**/*.h',

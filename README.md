@@ -129,7 +129,7 @@ Know exactly what breaks before you change it. Trace callers, callees, and the f
 <td width="33%" valign="top">
 
 ### 🌍 15+ Languages
-TypeScript, JavaScript, Python, Go, Rust, Java, C#, PHP, Ruby, C, C++, Swift, Kotlin—all with the same API.
+TypeScript, JavaScript, Python, Go, Rust, Java, C#, PHP, Ruby, C, C++, Swift, Objective-C, Kotlin—all with the same API.
 
 </td>
 <td width="33%" valign="top">
@@ -597,6 +597,7 @@ The `.codegraph/config.json` file controls indexing behavior:
 | C | `.c`, `.h` | Full support |
 | C++ | `.cpp`, `.hpp`, `.cc` | Full support |
 | Swift | `.swift` | Full support |
+| Objective-C | `.m`, `.mm`, `.h` (Objective-C headers) | Full support (`.mm` is best-effort for embedded C++) |
 | Kotlin | `.kt`, `.kts` | Full support |
 
 ## 🔧 Troubleshooting
